@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 # --- INIT Firebase Storage ---
 BUCKET_NAME = "maxillo-app.firebasestorage.app"
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "service-account.json"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "‎maxillo-app-firebase-adminsdk-fbsvc-33e4682258.json"
 
 # --- INIT Mediapipe ---
 mp_face_mesh = mp.solutions.face_mesh
