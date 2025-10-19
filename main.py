@@ -6,7 +6,7 @@ import os
 from google.cloud import storage
 from datetime import datetime
 
-main = Flask(__name__)
+app = Flask(__name__)
 
 # --- INIT Firebase Storage ---
 BUCKET_NAME = "maxillo-app.firebasestorage.app"
@@ -24,11 +24,11 @@ def upload_bytes_to_storage(bytes_data: bytes, destination_path: str) -> str:
     blob.make_public()  # ⚠️ seulement pour test, à désactiver après
     return blob.public_url
 
-@main.route('/', methods=['GET'])
+@app.route('/', methods=['GET'])
 def home():
     return jsonify({"message": "Server running!"})
 
-@main.route('/analyze', methods=['POST'])
+@app.route('/analyze', methods=['POST'])
 def analyze():
     if 'image' not in request.files:
         return jsonify({"success": False, "message": "No image provided"}), 400
@@ -70,4 +70,4 @@ def analyze():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    main.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port)
