@@ -6,11 +6,11 @@ import os
 from google.cloud import storage
 from datetime import datetime
 
-app = Flask(__name__)
+main = Flask(__name__)
 
 # --- INIT Firebase Storage ---
 BUCKET_NAME = "maxillo-app.firebasestorage.app"
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "‎maxillo-app-firebase-adminsdk-fbsvc-33e4682258.json"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "maxillo-app-firebase-adminsdk-fbsvc-33e4682258.json"
 
 # --- INIT Mediapipe ---
 mp_face_mesh = mp.solutions.face_mesh
@@ -24,11 +24,11 @@ def upload_bytes_to_storage(bytes_data: bytes, destination_path: str) -> str:
     blob.make_public()  # ⚠️ seulement pour test, à désactiver après
     return blob.public_url
 
-@app.route('/', methods=['GET'])
+@main.route('/', methods=['GET'])
 def home():
     return jsonify({"message": "Server running!"})
 
-@app.route('/analyze', methods=['POST'])
+@main.route('/analyze', methods=['POST'])
 def analyze():
     if 'image' not in request.files:
         return jsonify({"success": False, "message": "No image provided"}), 400
@@ -70,4 +70,4 @@ def analyze():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    main.run(host="0.0.0.0", port=port)
