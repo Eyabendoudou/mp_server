@@ -7,7 +7,7 @@ from google.cloud import storage
 from datetime import datetime
 
 app = Flask(__name__)
-
+SERVER_SECRET = os.environ.get("ANALYZER_SECRET", "a63b2f31bd9e236a5220bcaee53ea16e300454e3c27e95f8d6c46ceea6abe09e")  # set real secret in Railway env
 # --- INIT Firebase Storage ---
 BUCKET_NAME = "maxillo-app.firebasestorage.app"
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "maxillo-app-firebase-adminsdk-fbsvc-33e4682258.json"
@@ -30,9 +30,13 @@ def home():
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
+    auth_header = request.headers.get("Authorization")
+    if auth_header is None or auth_header != f"Bearer {SERVER_SECRET}":
+        return jsonify({"success": False, "message": "Unauthorized"}), 401
+    
     if 'image' not in request.files:
         return jsonify({"success": False, "message": "No image provided"}), 400
-
+    
     file = request.files['image']
     patient_id = request.form.get('patientId', 'unknown')
 
@@ -43,6 +47,7 @@ def analyze():
         return jsonify({"success": False, "message": "Invalid image"}), 400
 
     face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1)
+    landmark_list = []
     results = face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     if not results.multi_face_landmarks:
         return jsonify({"success": False, "message": "No face detected"}), 200
@@ -54,6 +59,8 @@ def analyze():
             connections=[],
             landmark_drawing_spec=mp_drawing.DrawingSpec(color=(0,255,0), thickness=1, circle_radius=1),
         )
+    for lm in face_landmarks.landmark:
+        landmark_list.append({"x": float(lm.x), "y": float(lm.y), "z": float(lm.z)})
 
     _, buffer = cv2.imencode('.jpg', image)
     image_bytes = buffer.tobytes()
@@ -65,7 +72,9 @@ def analyze():
     return jsonify({
         "success": True,
         "message": "Processed and uploaded",
-        "download_url": download_url
+        "download_url": download_url,
+        "landmarks": landmark_list
+        
     })
 
 if __name__ == "__main__":
