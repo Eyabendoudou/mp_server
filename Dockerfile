@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY . .
+RUN chmod +x /app/docker-cmd
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-CMD [/bin/"chmod" +x "/app/docker-cmd"]
+CMD ["/app/docker-cmd"]
