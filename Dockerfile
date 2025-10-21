@@ -14,4 +14,4 @@ COPY . .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-CMD [chmod +x "/app/docker-cmd"]
+CMD [/bin/chmod +x "/app/docker-cmd"]
