@@ -131,6 +131,7 @@ def calculate_proportionality_from_landmarks(landmarks, img_w, img_h):
     """
     Compute facial thirds (upper/middle/lower) in mm and produce an assessment.
     Returns dict with upper_third_mm, middle_third_mm, lower_third_mm, proportionality_assessment
+    and pixel y-coordinates for drawing.
     """
     try:
         # build pixel points array
@@ -183,6 +184,11 @@ def calculate_proportionality_from_landmarks(landmarks, img_w, img_h):
             'lower_third_mm': lower_mm,
             'proportionality_assessment': assessment,
             'mm_per_pixel': mm_per_pixel,
+            # pixel coordinates for drawing on image
+            'trichion_y_px': int(trichion_y),
+            'glabella_y_px': int(glabella_y),
+            'subnasale_y_px': int(subnasale_y),
+            'menton_y_px': int(menton_y),
         }
     except Exception as e:
         print("Proportionality calc error:", e)
@@ -238,7 +244,7 @@ def analyze():
     # calculate proportionality from same landmarks
     proportionality = calculate_proportionality_from_landmarks(face_landmarks.landmark, w, h)
 
-    # encode annotated image
+    # encode annotated landmark image (existing)
     _, buffer = cv2.imencode('.jpg', image)
     image_bytes = buffer.tobytes()
 
@@ -246,15 +252,66 @@ def analyze():
     dest = f"patients/{patient_id}/landmarks_{ts}.jpg"
     download_url = upload_bytes_to_storage(image_bytes, dest)
 
+    # Create proportionality annotated image (horizontal lines + labels) if proportionality available
+    proportion_image_url = None
+    if proportionality:
+        try:
+            prop_img = image.copy()
+            color_line = (0, 120, 255)  # orange-ish
+            thickness = 2
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = max(0.6, min(w, h) / 800)  # scale with image size
+            text_color = (255, 255, 255)
+            # y positions
+            t_y = int(proportionality.get('trichion_y_px', 0))
+            g_y = int(proportionality.get('glabella_y_px', 0))
+            s_y = int(proportionality.get('subnasale_y_px', 0))
+            m_y = int(proportionality.get('menton_y_px', 0))
+            # draw horizontal lines across the image width
+            cv2.line(prop_img, (0, t_y), (w, t_y), color_line, thickness)
+            cv2.line(prop_img, (0, g_y), (w, g_y), color_line, thickness)
+            cv2.line(prop_img, (0, s_y), (w, s_y), color_line, thickness)
+            cv2.line(prop_img, (0, m_y), (w, m_y), color_line, thickness)
+            # write mm values near right side
+            try:
+                upper_mm = proportionality.get('upper_third_mm')
+                middle_mm = proportionality.get('middle_third_mm')
+                lower_mm = proportionality.get('lower_third_mm')
+                if upper_mm is not None:
+                    cv2.putText(prop_img, f"Upper: {upper_mm:.1f} mm", (10, max(15, t_y - 10)), font, font_scale, text_color, 2, cv2.LINE_AA)
+                if middle_mm is not None:
+                    cv2.putText(prop_img, f"Middle: {middle_mm:.1f} mm", (10, max(15, g_y - 10)), font, font_scale, text_color, 2, cv2.LINE_AA)
+                if lower_mm is not None:
+                    cv2.putText(prop_img, f"Lower: {lower_mm:.1f} mm", (10, max(15, s_y - 10)), font, font_scale, text_color, 2, cv2.LINE_AA)
+                # assessment text at bottom
+                assessment = proportionality.get('proportionality_assessment')
+                if assessment:
+                    cv2.putText(prop_img, assessment, (10, h - 10), font, max(0.7, font_scale), (220, 220, 220), 2, cv2.LINE_AA)
+            except Exception:
+                pass
+
+            _, prop_buffer = cv2.imencode('.jpg', prop_img)
+            prop_bytes = prop_buffer.tobytes()
+            dest_prop = f"patients/{patient_id}/proportionality_{ts}.jpg"
+            proportion_image_url = upload_bytes_to_storage(prop_bytes, dest_prop)
+            # also attach image url into proportionality dict
+            proportionality['imageUrl'] = proportion_image_url
+        except Exception as e:
+            print("Proportionality image generation/upload error:", e)
+            proportion_image_url = None
+
     # Persist an analysis document to Firestore (patients/{patientId}/analyses)
     try:
         doc_ref = firestore_client.collection('patients').document(patient_id).collection('analyses').document()
+        # embed proportionality (with imageUrl if generated)
         analysis_doc = {
             'createdAt': firestore.SERVER_TIMESTAMP,
             'resultImageUrl': download_url,
             'landmarks': all_landmarks,
             'clinicalMeasures': clinical_measures,
             'proportionality': proportionality,
+            # keep backward-compatible key
+            'proportion_image': proportion_image_url,
             'status': 'done',
         }
         doc_ref.set(analysis_doc)
