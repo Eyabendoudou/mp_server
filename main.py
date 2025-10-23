@@ -216,6 +216,9 @@ def analyze():
     if image is None:
         return jsonify({"success": False, "message": "Invalid image"}), 400
 
+    # keep original frontal image untouched
+    original_image = image.copy()
+
     h, w = image.shape[:2]
     face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, refine_landmarks=True)
 
@@ -225,9 +228,11 @@ def analyze():
 
     # use first face
     face_landmarks = results.multi_face_landmarks[0]
-    # draw landmarks on image (same as before)
+
+    # --- create landmark image by drawing on a copy (so original remains untouched) ---
+    landmark_img = original_image.copy()
     mp.solutions.drawing_utils.draw_landmarks(
-        image=image,
+        image=landmark_img,
         landmark_list=face_landmarks,
         connections=[],
         landmark_drawing_spec=mp.solutions.drawing_utils.DrawingSpec(color=(0,255,0), thickness=1, circle_radius=1),
@@ -244,49 +249,66 @@ def analyze():
     # calculate proportionality from same landmarks
     proportionality = calculate_proportionality_from_landmarks(face_landmarks.landmark, w, h)
 
-    # encode annotated landmark image (existing)
-    _, buffer = cv2.imencode('.jpg', image)
-    image_bytes = buffer.tobytes()
-
+    # upload landmark image (resultImageUrl should point to landmark image)
+    _, buffer_land = cv2.imencode('.jpg', landmark_img)
+    landmark_bytes = buffer_land.tobytes()
     ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    dest = f"patients/{patient_id}/landmarks_{ts}.jpg"
-    download_url = upload_bytes_to_storage(image_bytes, dest)
+    dest_land = f"patients/{patient_id}/landmarks_{ts}.jpg"
+    landmark_url = upload_bytes_to_storage(landmark_bytes, dest_land)
 
-    # Create proportionality annotated image (horizontal lines + labels) if proportionality available
+    # Create proportionality annotated image from ORIGINAL frontal image (no landmarks overlay)
     proportion_image_url = None
     if proportionality:
         try:
-            prop_img = image.copy()
-            color_line = (0, 120, 255)  # orange-ish
-            thickness = 2
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = max(0.6, min(w, h) / 800)  # scale with image size
+            prop_img = original_image.copy()  # use original frontal image
+            # line color as chosen previously (BGR)
+            color_line = (0, 120, 255)  # orange-ish BGR
+            thickness = 3
+            font = cv2.FONT_HERSHEY_TRIPLEX
+            font_scale = max(0.7, min(w, h) / 700)  # slightly larger scale
             text_color = (255, 255, 255)
-            # y positions
+            rect_bg_color = (0, 0, 0)
+
+            # helper to draw bold text with background
+            def put_bold_text(img, text, org, font, font_scale, text_color, thickness):
+                (txt_w, txt_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+                x, y = org
+                # ensure background rectangle stays inside image
+                x0 = max(0, x - 6)
+                y0 = max(0, y - txt_h - 6)
+                x1 = min(img.shape[1], x + txt_w + 6)
+                y1 = min(img.shape[0], y + baseline + 6)
+                cv2.rectangle(img, (x0, y0), (x1, y1), rect_bg_color, -1)
+                cv2.putText(img, text, (x, y), font, font_scale, text_color, thickness, cv2.LINE_AA)
+
+            # y positions (safely fetch)
             t_y = int(proportionality.get('trichion_y_px', 0))
             g_y = int(proportionality.get('glabella_y_px', 0))
             s_y = int(proportionality.get('subnasale_y_px', 0))
             m_y = int(proportionality.get('menton_y_px', 0))
+
             # draw horizontal lines across the image width
-            cv2.line(prop_img, (0, t_y), (w, t_y), color_line, thickness)
-            cv2.line(prop_img, (0, g_y), (w, g_y), color_line, thickness)
-            cv2.line(prop_img, (0, s_y), (w, s_y), color_line, thickness)
-            cv2.line(prop_img, (0, m_y), (w, m_y), color_line, thickness)
-            # write mm values near right side
+            if 0 <= t_y < h: cv2.line(prop_img, (0, t_y), (w, t_y), color_line, thickness)
+            if 0 <= g_y < h: cv2.line(prop_img, (0, g_y), (w, g_y), color_line, thickness)
+            if 0 <= s_y < h: cv2.line(prop_img, (0, s_y), (w, s_y), color_line, thickness)
+            if 0 <= m_y < h: cv2.line(prop_img, (0, m_y), (w, m_y), color_line, thickness)
+
+            # write mm values near left side with bold background to increase readability
             try:
                 upper_mm = proportionality.get('upper_third_mm')
                 middle_mm = proportionality.get('middle_third_mm')
                 lower_mm = proportionality.get('lower_third_mm')
                 if upper_mm is not None:
-                    cv2.putText(prop_img, f"Upper: {upper_mm:.1f} mm", (10, max(15, t_y - 10)), font, font_scale, text_color, 2, cv2.LINE_AA)
+                    put_bold_text(prop_img, f"Upper: {upper_mm:.1f} mm", (10, max(20, t_y - 6)), font, font_scale, text_color, 2)
                 if middle_mm is not None:
-                    cv2.putText(prop_img, f"Middle: {middle_mm:.1f} mm", (10, max(15, g_y - 10)), font, font_scale, text_color, 2, cv2.LINE_AA)
+                    put_bold_text(prop_img, f"Middle: {middle_mm:.1f} mm", (10, max(20, g_y - 6)), font, font_scale, text_color, 2)
                 if lower_mm is not None:
-                    cv2.putText(prop_img, f"Lower: {lower_mm:.1f} mm", (10, max(15, s_y - 10)), font, font_scale, text_color, 2, cv2.LINE_AA)
+                    put_bold_text(prop_img, f"Lower: {lower_mm:.1f} mm", (10, max(20, s_y - 6)), font, font_scale, text_color, 2)
+
                 # assessment text at bottom
                 assessment = proportionality.get('proportionality_assessment')
                 if assessment:
-                    cv2.putText(prop_img, assessment, (10, h - 10), font, max(0.7, font_scale), (220, 220, 220), 2, cv2.LINE_AA)
+                    put_bold_text(prop_img, assessment, (10, h - 12), font, max(0.8, font_scale), (230, 230, 230), 2)
             except Exception:
                 pass
 
@@ -306,7 +328,8 @@ def analyze():
         # embed proportionality (with imageUrl if generated)
         analysis_doc = {
             'createdAt': firestore.SERVER_TIMESTAMP,
-            'resultImageUrl': download_url,
+            # landmark image URL as resultImageUrl
+            'resultImageUrl': landmark_url,
             'landmarks': all_landmarks,
             'clinicalMeasures': clinical_measures,
             'proportionality': proportionality,
@@ -326,7 +349,7 @@ def analyze():
     return jsonify({
         "success": True,
         "message": "Processed and uploaded",
-        "download_url": download_url,
+        "download_url": landmark_url,
         "landmarks": landmark_list,
         "clinicalMeasures": clinical_measures,
         "proportionality": proportionality
