@@ -3,5 +3,6 @@ gunicorn==23.0.0
 opencv-python-headless==4.10.0.84
 mediapipe==0.10.14
 google-cloud-storage==2.18.2
+google-cloud-firestore==2.16.1
 numpy==1.26.4
 Pillow==10.3.0
