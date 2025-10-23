@@ -127,6 +127,67 @@ def calculate_clinical_measures_from_landmarks(landmarks, img_w, img_h):
 
     return measures, all_landmarks
 
+def calculate_proportionality_from_landmarks(landmarks, img_w, img_h):
+    """
+    Compute facial thirds (upper/middle/lower) in mm and produce an assessment.
+    Returns dict with upper_third_mm, middle_third_mm, lower_third_mm, proportionality_assessment
+    """
+    try:
+        # build pixel points array
+        pts = [(int(lm.x * img_w), int(lm.y * img_h)) for lm in landmarks]
+        # eyebrow top: min y across a broad eyebrow region
+        top_eyebrow_y = min(pts[i][1] for i in range(65, 296))
+        glabella_y = pts[9][1]
+        subnasale_y = pts[2][1]
+        menton_y = pts[152][1]
+
+        # pupils for calibration
+        left_pupil = np.array(pts[468])
+        right_pupil = np.array(pts[473])
+        ipd_pixels = float(np.linalg.norm(left_pupil - right_pupil))
+        if ipd_pixels == 0:
+            return None
+
+        mm_per_pixel = 63.0 / ipd_pixels
+
+        # estimate trichion (top of forehead) by extrapolation
+        estimated_upper_face_px = glabella_y - top_eyebrow_y
+        trichion_y = max(int(top_eyebrow_y - estimated_upper_face_px), 0)
+
+        # sort vertical coordinates robustly
+        y_coords = sorted([trichion_y, glabella_y, subnasale_y, menton_y])
+        trichion_y, glabella_y, subnasale_y, menton_y = y_coords
+
+        upper_px = glabella_y - trichion_y
+        middle_px = subnasale_y - glabella_y
+        lower_px = menton_y - subnasale_y
+        total_px = menton_y - trichion_y
+        if total_px <= 0:
+            return None
+
+        upper_mm = float(upper_px * mm_per_pixel)
+        middle_mm = float(middle_px * mm_per_pixel)
+        lower_mm = float(lower_px * mm_per_pixel)
+
+        tolerance_mm = 10.0
+        if (abs(upper_mm - middle_mm) <= tolerance_mm and
+                abs(middle_mm - lower_mm) <= tolerance_mm and
+                abs(upper_mm - lower_mm) <= tolerance_mm):
+            assessment = "Proportions harmonieuses"
+        else:
+            assessment = "Proportions non harmonieuses"
+
+        return {
+            'upper_third_mm': upper_mm,
+            'middle_third_mm': middle_mm,
+            'lower_third_mm': lower_mm,
+            'proportionality_assessment': assessment,
+            'mm_per_pixel': mm_per_pixel,
+        }
+    except Exception as e:
+        print("Proportionality calc error:", e)
+        return None
+
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({"message": "Server running!"})
@@ -174,6 +235,9 @@ def analyze():
     # calculate clinical measures
     clinical_measures, all_landmarks = calculate_clinical_measures_from_landmarks(face_landmarks.landmark, w, h)
 
+    # calculate proportionality from same landmarks
+    proportionality = calculate_proportionality_from_landmarks(face_landmarks.landmark, w, h)
+
     # encode annotated image
     _, buffer = cv2.imencode('.jpg', image)
     image_bytes = buffer.tobytes()
@@ -190,6 +254,7 @@ def analyze():
             'resultImageUrl': download_url,
             'landmarks': all_landmarks,
             'clinicalMeasures': clinical_measures,
+            'proportionality': proportionality,
             'status': 'done',
         }
         doc_ref.set(analysis_doc)
@@ -206,7 +271,8 @@ def analyze():
         "message": "Processed and uploaded",
         "download_url": download_url,
         "landmarks": landmark_list,
-        "clinicalMeasures": clinical_measures
+        "clinicalMeasures": clinical_measures,
+        "proportionality": proportionality
     })
 
 if __name__ == "__main__":
