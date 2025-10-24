@@ -261,19 +261,20 @@ def analyze():
     if proportionality:
         try:
             prop_img = original_image.copy()  # use original frontal image
-            # line color as chosen previously (BGR)
-            color_line = (0, 120, 255)  # orange-ish BGR
-            thickness = 3
-            font = cv2.FONT_HERSHEY_TRIPLEX
-            font_scale = max(0.7, min(w, h) / 700)  # slightly larger scale
+
+            # Colors & thickness to match your Colab:
+            yellow = (0, 255, 255)  # BGR yellow
+            green = (0, 255, 0)     # BGR green
+            line_thickness = 5      # thicker lines like Colab
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = max(0.8, min(w, h) / 700)  # readable scale
             text_color = (255, 255, 255)
             rect_bg_color = (0, 0, 0)
 
-            # helper to draw bold text with background
+            # helper to draw bold text with background for legibility
             def put_bold_text(img, text, org, font, font_scale, text_color, thickness):
                 (txt_w, txt_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
                 x, y = org
-                # ensure background rectangle stays inside image
                 x0 = max(0, x - 6)
                 y0 = max(0, y - txt_h - 6)
                 x1 = min(img.shape[1], x + txt_w + 6)
@@ -287,25 +288,40 @@ def analyze():
             s_y = int(proportionality.get('subnasale_y_px', 0))
             m_y = int(proportionality.get('menton_y_px', 0))
 
-            # draw horizontal lines across the image width
-            if 0 <= t_y < h: cv2.line(prop_img, (0, t_y), (w, t_y), color_line, thickness)
-            if 0 <= g_y < h: cv2.line(prop_img, (0, g_y), (w, g_y), color_line, thickness)
-            if 0 <= s_y < h: cv2.line(prop_img, (0, s_y), (w, s_y), color_line, thickness)
-            if 0 <= m_y < h: cv2.line(prop_img, (0, m_y), (w, m_y), color_line, thickness)
+            # draw horizontal lines: top & bottom -> yellow, middle two -> green
+            if 0 <= t_y < h:
+                cv2.line(prop_img, (0, t_y), (w, t_y), yellow, line_thickness, cv2.LINE_AA)
+            if 0 <= g_y < h:
+                cv2.line(prop_img, (0, g_y), (w, g_y), green, line_thickness, cv2.LINE_AA)
+            if 0 <= s_y < h:
+                cv2.line(prop_img, (0, s_y), (w, s_y), green, line_thickness, cv2.LINE_AA)
+            if 0 <= m_y < h:
+                cv2.line(prop_img, (0, m_y), (w, m_y), yellow, line_thickness, cv2.LINE_AA)
 
-            # write mm values near left side with bold background to increase readability
+            # write labels and measurements near each corresponding line
             try:
                 upper_mm = proportionality.get('upper_third_mm')
                 middle_mm = proportionality.get('middle_third_mm')
                 lower_mm = proportionality.get('lower_third_mm')
-                if upper_mm is not None:
-                    put_bold_text(prop_img, f"Upper: {upper_mm:.1f} mm", (10, max(20, t_y - 6)), font, font_scale, text_color, 2)
-                if middle_mm is not None:
-                    put_bold_text(prop_img, f"Middle: {middle_mm:.1f} mm", (10, max(20, g_y - 6)), font, font_scale, text_color, 2)
-                if lower_mm is not None:
-                    put_bold_text(prop_img, f"Lower: {lower_mm:.1f} mm", (10, max(20, s_y - 6)), font, font_scale, text_color, 2)
 
-                # assessment text at bottom
+                # Labels in French and measurement text — positioned close to their lines
+                if upper_mm is not None and 0 <= t_y < h:
+                    put_bold_text(prop_img, f"Haut: {upper_mm:.1f} mm", (10, max(20, t_y - 6)), font, font_scale, text_color, 3)
+                    put_bold_text(prop_img, "Trichion", (w - 140, max(20, t_y - 6)), font, max(0.6, font_scale * 0.9), text_color, 2)
+
+                if middle_mm is not None and 0 <= g_y < h:
+                    put_bold_text(prop_img, f"Milieu: {middle_mm:.1f} mm", (10, max(20, g_y - 6)), font, font_scale, text_color, 3)
+                    put_bold_text(prop_img, "Glabella", (w - 140, max(20, g_y - 6)), font, max(0.6, font_scale * 0.9), text_color, 2)
+
+                if lower_mm is not None and 0 <= s_y < h:
+                    put_bold_text(prop_img, f"Bas: {lower_mm:.1f} mm", (10, max(20, s_y - 6)), font, font_scale, text_color, 3)
+                    put_bold_text(prop_img, "Subnasale", (w - 140, max(20, s_y - 6)), font, max(0.6, font_scale * 0.9), text_color, 2)
+
+                # Menton (bottom) label
+                if 0 <= m_y < h:
+                    put_bold_text(prop_img, "Menton", (10, min(h - 10, m_y + 18)), font, max(0.65, font_scale * 0.9), text_color, 2)
+
+                # assessment text at bottom with bold background
                 assessment = proportionality.get('proportionality_assessment')
                 if assessment:
                     put_bold_text(prop_img, assessment, (10, h - 12), font, max(0.8, font_scale), (230, 230, 230), 2)
