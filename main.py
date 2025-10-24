@@ -330,16 +330,16 @@ def analyze():
                 right_x = max(10, w - 200)
 
                 if upper_mm is not None and 0 <= t_y < h:
-                    put_label_above_line(prop_img, f"Haut: {upper_mm:.1f} mm", t_y, left_x, font, font_scale * 0.9, text_color, 3)
-                    put_label_above_line(prop_img, "Trichion", t_y, right_x, font, font_scale * 0.8, text_color, 2)
+                    put_label_above_line(prop_img, f"Haut: {upper_mm:.1f} mm", t_y, left_x, font, font_scale * 0.3, text_color, 3)
+                    put_label_above_line(prop_img, "Trichion", t_y, right_x, font, font_scale * 0.4, text_color, 2)
 
                 if middle_mm is not None and 0 <= g_y < h:
-                    put_label_above_line(prop_img, f"Milieu: {middle_mm:.1f} mm", g_y, left_x, font, font_scale * 0.9, text_color, 3)
-                    put_label_above_line(prop_img, "Glabella", g_y, right_x, font, font_scale * 0.8, text_color, 2)
+                    put_label_above_line(prop_img, f"Milieu: {middle_mm:.1f} mm", g_y, left_x, font, font_scale * 0.3, text_color, 3)
+                    put_label_above_line(prop_img, "Glabella", g_y, right_x, font, font_scale * 0.4, text_color, 2)
 
                 if lower_mm is not None and 0 <= s_y < h:
-                    put_label_above_line(prop_img, f"Bas: {lower_mm:.1f} mm", s_y, left_x, font, font_scale * 0.9, text_color, 3)
-                    put_label_above_line(prop_img, "Subnasale", s_y, right_x, font, font_scale * 0.8, text_color, 2)
+                    put_label_above_line(prop_img, f"Bas: {lower_mm:.1f} mm", s_y, left_x, font, font_scale * 0.3, text_color, 3)
+                    put_label_above_line(prop_img, "Subnasale", s_y, right_x, font, font_scale * 0.4, text_color, 2)
 
                 # Menton (bottom) label: ensure it's inside image and not overlapping face region
                 if 0 <= m_y < h:
