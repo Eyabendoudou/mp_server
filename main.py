@@ -194,6 +194,53 @@ def calculate_proportionality_from_landmarks(landmarks, img_w, img_h):
         print("Proportionality calc error:", e)
         return None
 
+def test_symetrie_mm(landmarks_points, ipd_mm=63.0):
+    """
+    Compute average facial symmetry difference in mm and return (avg_mm, interpretation)
+    Uses the pair indices from your Colab script.
+    """
+    try:
+        if landmarks_points is None or len(landmarks_points) < 474:
+            return None, "Landmarks insuffisants"
+
+        center_x = landmarks_points[1][0]
+        eye_left = landmarks_points[468]
+        eye_right = landmarks_points[473]
+
+        ipd_px = float(np.linalg.norm(np.array(eye_left) - np.array(eye_right)))
+        px_to_mm = ipd_mm / ipd_px if ipd_px != 0 else 1.0
+
+        symmetric_pairs = [
+            (33, 263), (133, 362), (97, 326), (61, 291)
+        ]
+
+        total_diff_mm = 0.0
+        valid = 0
+        for left_idx, right_idx in symmetric_pairs:
+            if left_idx < len(landmarks_points) and right_idx < len(landmarks_points):
+                pl = landmarks_points[left_idx]
+                pr = landmarks_points[right_idx]
+                diff_mm = abs(abs(pl[0]-center_x) - abs(pr[0]-center_x)) * px_to_mm
+                total_diff_mm += diff_mm
+                valid += 1
+
+        if valid == 0:
+            return None, "Pas de paires valides"
+
+        average_diff_mm = float(total_diff_mm / valid)
+
+        if average_diff_mm < 3:
+            sym_text = "Symétrie faciale bonne"
+        elif average_diff_mm < 10:
+            sym_text = "Symétrie modérée"
+        else:
+            sym_text = "Asymétrie notable"
+
+        return average_diff_mm, sym_text
+    except Exception as e:
+        print("Symmetry calc error:", e)
+        return None, "Erreur calcul symétrie"
+
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({"message": "Server running!"})
@@ -248,6 +295,77 @@ def analyze():
 
     # calculate proportionality from same landmarks
     proportionality = calculate_proportionality_from_landmarks(face_landmarks.landmark, w, h)
+
+    # --- SYMMETRY TEST (compute metrics + annotated image) ---
+    symmetry = None
+    symmetry_image_url = None
+    try:
+        # prepare pixel landmark points
+        landmarks_points = [(int(lm.x * w), int(lm.y * h)) for lm in face_landmarks.landmark]
+        avg_diff_mm, sym_text = test_symetrie_mm(landmarks_points)
+
+        symmetry = {
+            'meanAsymmetry': float(avg_diff_mm) if avg_diff_mm is not None else None,
+            'status': sym_text or '',
+        }
+
+        # Create symmetry annotated image (use original frontal image)
+        try:
+            sym_img = original_image.copy()
+            center_x = landmarks_points[1][0] if len(landmarks_points) > 1 else w // 2
+            # colors and thickness
+            center_color = (255, 0, 0)  # blue-ish line (BGR)
+            pair_color = (0, 255, 0)    # green for pair markers
+            thickness = 3
+            # draw vertical center line
+            cv2.line(sym_img, (center_x, 0), (center_x, h), center_color, thickness, cv2.LINE_AA)
+
+            # draw symmetric pairs connectors and markers
+            pairs = [(33, 263), (133, 362), (97, 326), (61, 291)]
+            for left_idx, right_idx in pairs:
+                if left_idx < len(landmarks_points) and right_idx < len(landmarks_points):
+                    pl = landmarks_points[left_idx]
+                    pr = landmarks_points[right_idx]
+                    # draw small circles
+                    cv2.circle(sym_img, pl, 4, pair_color, -1, cv2.LINE_AA)
+                    cv2.circle(sym_img, pr, 4, pair_color, -1, cv2.LINE_AA)
+                    # draw line between pair
+                    cv2.line(sym_img, pl, pr, pair_color, 2, cv2.LINE_AA)
+                    # draw small horizontal markers to center distances
+                    cv2.line(sym_img, (pl[0], pl[1]-8), (pl[0], pl[1]+8), (255,255,255), 1)
+                    cv2.line(sym_img, (pr[0], pr[1]-8), (pr[0], pr[1]+8), (255,255,255), 1)
+
+            # annotated avg and interpretation text (bold background)
+            def put_bg_text(img, text, pos, scale=0.8, thickness_txt=2):
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                (tw, th), baseline = cv2.getTextSize(text, font, scale, thickness_txt)
+                x, y = pos
+                x1 = max(0, x - 6)
+                y1 = max(0, y - th - 6)
+                x2 = min(img.shape[1], x + tw + 6)
+                y2 = min(img.shape[0], y + baseline + 6)
+                cv2.rectangle(img, (x1, y1), (x2, y2), (0,0,0), -1)
+                cv2.putText(img, text, (x, y), font, scale, (255,255,255), thickness_txt, cv2.LINE_AA)
+
+            if avg_diff_mm is not None:
+                put_bg_text(sym_img, f"Asym. moy: {avg_diff_mm:.2f} mm", (10, 30), 0.8, 2)
+            put_bg_text(sym_img, sym_text, (10, h - 20), 0.8, 2)
+
+            _, sym_buf = cv2.imencode('.jpg', sym_img)
+            sym_bytes = sym_buf.tobytes()
+            dest_sym = f"patients/{patient_id}/symmetry_{ts}.jpg"
+            symmetry_image_url = upload_bytes_to_storage(sym_bytes, dest_sym)
+            symmetry['imageUrl'] = symmetry_image_url
+        except Exception as e:
+            print("Symmetry image gen/upload error:", e)
+            symmetry_image_url = None
+    except Exception as e:
+        print("Symmetry overall error:", e)
+        symmetry = {'meanAsymmetry': None, 'status': 'Erreur de calcul'}
+
+    # encode annotated landmark image (existing)
+    _, buffer = cv2.imencode('.jpg', image)
+    image_bytes = buffer.tobytes()
 
     # upload landmark image (resultImageUrl should point to landmark image)
     _, buffer_land = cv2.imencode('.jpg', landmark_img)
@@ -330,16 +448,16 @@ def analyze():
                 right_x = max(10, w - 200)
 
                 if upper_mm is not None and 0 <= t_y < h:
-                    put_label_above_line(prop_img, f"Haut: {upper_mm:.1f} mm", t_y, left_x, font, font_scale * 0.3, text_color, 3)
-                    put_label_above_line(prop_img, "Trichion", t_y, right_x, font, font_scale * 0.4, text_color, 2)
+                    put_label_above_line(prop_img, f"Haut: {upper_mm:.1f} mm", t_y, left_x, font, font_scale * 0.6, text_color, 3)
+                    put_label_above_line(prop_img, "Trichion", t_y, right_x, font, font_scale * 0.6, text_color, 2)
 
                 if middle_mm is not None and 0 <= g_y < h:
-                    put_label_above_line(prop_img, f"Milieu: {middle_mm:.1f} mm", g_y, left_x, font, font_scale * 0.3, text_color, 3)
-                    put_label_above_line(prop_img, "Glabella", g_y, right_x, font, font_scale * 0.4, text_color, 2)
+                    put_label_above_line(prop_img, f"Milieu: {middle_mm:.1f} mm", g_y, left_x, font, font_scale * 0.6, text_color, 3)
+                    put_label_above_line(prop_img, "Glabella", g_y, right_x, font, font_scale * 0.6, text_color, 2)
 
                 if lower_mm is not None and 0 <= s_y < h:
-                    put_label_above_line(prop_img, f"Bas: {lower_mm:.1f} mm", s_y, left_x, font, font_scale * 0.3, text_color, 3)
-                    put_label_above_line(prop_img, "Subnasale", s_y, right_x, font, font_scale * 0.4, text_color, 2)
+                    put_label_above_line(prop_img, f"Bas: {lower_mm:.1f} mm", s_y, left_x, font, font_scale * 0.6, text_color, 3)
+                    put_label_above_line(prop_img, "Subnasale", s_y, right_x, font, font_scale * 0.6, text_color, 2)
 
                 # Menton (bottom) label: ensure it's inside image and not overlapping face region
                 if 0 <= m_y < h:
@@ -373,13 +491,14 @@ def analyze():
         # embed proportionality (with imageUrl if generated)
         analysis_doc = {
             'createdAt': firestore.SERVER_TIMESTAMP,
-            # landmark image URL as resultImageUrl
-            'resultImageUrl': landmark_url,
+            'resultImageUrl': download_url,
             'landmarks': all_landmarks,
             'clinicalMeasures': clinical_measures,
             'proportionality': proportionality,
+            'symmetry': symmetry,
             # keep backward-compatible key
             'proportion_image': proportion_image_url,
+            'symmetry_image': symmetry_image_url,
             'status': 'done',
         }
         doc_ref.set(analysis_doc)
@@ -394,10 +513,11 @@ def analyze():
     return jsonify({
         "success": True,
         "message": "Processed and uploaded",
-        "download_url": landmark_url,
+        "download_url": download_url,
         "landmarks": landmark_list,
         "clinicalMeasures": clinical_measures,
-        "proportionality": proportionality
+        "proportionality": proportionality,
+        "symmetry": symmetry
     })
 
 if __name__ == "__main__":
