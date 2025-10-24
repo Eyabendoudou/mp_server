@@ -275,12 +275,33 @@ def analyze():
             def put_bold_text(img, text, org, font, font_scale, text_color, thickness):
                 (txt_w, txt_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
                 x, y = org
+                # ensure background rectangle stays inside image
                 x0 = max(0, x - 6)
                 y0 = max(0, y - txt_h - 6)
                 x1 = min(img.shape[1], x + txt_w + 6)
                 y1 = min(img.shape[0], y + baseline + 6)
                 cv2.rectangle(img, (x0, y0), (x1, y1), rect_bg_color, -1)
                 cv2.putText(img, text, (x, y), font, font_scale, text_color, thickness, cv2.LINE_AA)
+
+            # new helper: draw label slightly above a horizontal line while keeping it inside image
+            def put_label_above_line(img, text, line_y, x, font, font_scale, text_color, thickness):
+                (txt_w, txt_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+                # desired baseline y just above the line
+                desired_y = line_y - 8
+                min_y = txt_h + 8  # minimum baseline to avoid clipping at top
+                max_y = img.shape[0] - 8  # maximum baseline to avoid clipping at bottom
+                if desired_y < min_y:
+                    # not enough space above line — place below the line
+                    desired_y = line_y + txt_h + 8
+                # clamp to image
+                desired_y = int(min(max(desired_y, min_y), max_y))
+                # draw background rect + text (x used as left padding)
+                x0 = max(0, x - 6)
+                y0 = int(desired_y - txt_h - 6)
+                x1 = int(min(img.shape[1], x + txt_w + 6))
+                y1 = int(min(img.shape[0], desired_y + baseline + 6))
+                cv2.rectangle(img, (x0, y0), (x1, y1), rect_bg_color, -1)
+                cv2.putText(img, text, (x, desired_y), font, font_scale, text_color, thickness, cv2.LINE_AA)
 
             # y positions (safely fetch)
             t_y = int(proportionality.get('trichion_y_px', 0))
@@ -298,28 +319,36 @@ def analyze():
             if 0 <= m_y < h:
                 cv2.line(prop_img, (0, m_y), (w, m_y), yellow, line_thickness, cv2.LINE_AA)
 
-            # write labels and measurements near each corresponding line
+            # write labels and measurements near each corresponding line,
+            # using the new helper so text appears slightly above the line and not outside image
             try:
                 upper_mm = proportionality.get('upper_third_mm')
                 middle_mm = proportionality.get('middle_third_mm')
                 lower_mm = proportionality.get('lower_third_mm')
 
-                # Labels in French and measurement text — positioned close to their lines
+                left_x = 10
+                right_x = max(10, w - 200)
+
                 if upper_mm is not None and 0 <= t_y < h:
-                    put_bold_text(prop_img, f"Haut: {upper_mm:.1f} mm", (10, max(20, t_y - 6)), font, font_scale, text_color, 3)
-                    put_bold_text(prop_img, "Trichion", (w - 140, max(20, t_y - 6)), font, max(0.6, font_scale * 0.9), text_color, 2)
+                    put_label_above_line(prop_img, f"Haut: {upper_mm:.1f} mm", t_y, left_x, font, font_scale * 0.9, text_color, 3)
+                    put_label_above_line(prop_img, "Trichion", t_y, right_x, font, font_scale * 0.8, text_color, 2)
 
                 if middle_mm is not None and 0 <= g_y < h:
-                    put_bold_text(prop_img, f"Milieu: {middle_mm:.1f} mm", (10, max(20, g_y - 6)), font, font_scale, text_color, 3)
-                    put_bold_text(prop_img, "Glabella", (w - 140, max(20, g_y - 6)), font, max(0.6, font_scale * 0.9), text_color, 2)
+                    put_label_above_line(prop_img, f"Milieu: {middle_mm:.1f} mm", g_y, left_x, font, font_scale * 0.9, text_color, 3)
+                    put_label_above_line(prop_img, "Glabella", g_y, right_x, font, font_scale * 0.8, text_color, 2)
 
                 if lower_mm is not None and 0 <= s_y < h:
-                    put_bold_text(prop_img, f"Bas: {lower_mm:.1f} mm", (10, max(20, s_y - 6)), font, font_scale, text_color, 3)
-                    put_bold_text(prop_img, "Subnasale", (w - 140, max(20, s_y - 6)), font, max(0.6, font_scale * 0.9), text_color, 2)
+                    put_label_above_line(prop_img, f"Bas: {lower_mm:.1f} mm", s_y, left_x, font, font_scale * 0.9, text_color, 3)
+                    put_label_above_line(prop_img, "Subnasale", s_y, right_x, font, font_scale * 0.8, text_color, 2)
 
-                # Menton (bottom) label
+                # Menton (bottom) label: ensure it's inside image and not overlapping face region
                 if 0 <= m_y < h:
-                    put_bold_text(prop_img, "Menton", (10, min(h - 10, m_y + 18)), font, max(0.65, font_scale * 0.9), text_color, 2)
+                    # prefer slightly below the bottom line if there's space; otherwise above
+                    (txt_w_m, txt_h_m), baseline_m = cv2.getTextSize("Menton", font, font_scale * 0.8, 2)
+                    y_m = m_y + txt_h_m + 12
+                    if y_m > h - 6:
+                        y_m = max(txt_h_m + 8, m_y - 8)
+                    put_bold_text(prop_img, "Menton", (10, int(y_m)), font, max(0.65, font_scale * 0.8), text_color, 2)
 
                 # assessment text at bottom with bold background
                 assessment = proportionality.get('proportionality_assessment')
