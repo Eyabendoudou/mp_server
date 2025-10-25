@@ -263,6 +263,9 @@ def analyze():
     if image is None:
         return jsonify({"success": False, "message": "Invalid image"}), 400
 
+    # create timestamp right away so all image generators can use the same ts safely
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+
     # keep original frontal image untouched
     original_image = image.copy()
 
@@ -370,7 +373,6 @@ def analyze():
     # upload landmark image (resultImageUrl should point to landmark image)
     _, buffer_land = cv2.imencode('.jpg', landmark_img)
     landmark_bytes = buffer_land.tobytes()
-    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     dest_land = f"patients/{patient_id}/landmarks_{ts}.jpg"
     landmark_url = upload_bytes_to_storage(landmark_bytes, dest_land)
 
@@ -491,7 +493,7 @@ def analyze():
         # embed proportionality (with imageUrl if generated)
         analysis_doc = {
             'createdAt': firestore.SERVER_TIMESTAMP,
-            'resultImageUrl': download_url,
+            'resultImageUrl': landmark_url,
             'landmarks': all_landmarks,
             'clinicalMeasures': clinical_measures,
             'proportionality': proportionality,
@@ -513,7 +515,7 @@ def analyze():
     return jsonify({
         "success": True,
         "message": "Processed and uploaded",
-        "download_url": download_url,
+        "download_url": landmark_url,
         "landmarks": landmark_list,
         "clinicalMeasures": clinical_measures,
         "proportionality": proportionality,
