@@ -230,16 +230,16 @@ def test_symetrie_mm(landmarks_points, ipd_mm=63.0):
         average_diff_mm = float(total_diff_mm / valid)
 
         if average_diff_mm < 3:
-            sym_text = "Symétrie faciale bonne"
+            sym_text = "Symetrie faciale bonne"
         elif average_diff_mm < 10:
-            sym_text = "Symétrie modérée"
+            sym_text = "Symetrie moderee"
         else:
-            sym_text = "Asymétrie notable"
+            sym_text = "Asymetrie notable"
 
         return average_diff_mm, sym_text
     except Exception as e:
         print("Symmetry calc error:", e)
-        return None, "Erreur calcul symétrie"
+        return None, "Erreur calcul symetrie"
 
 @app.route('/', methods=['GET'])
 def home():
@@ -315,28 +315,26 @@ def analyze():
         # Create symmetry annotated image (use original frontal image)
         try:
             sym_img = original_image.copy()
-            center_x = landmarks_points[1][0] if len(landmarks_points) > 1 else w // 2
-            # colors and thickness
-            center_color = (255, 0, 0)  # blue-ish line (BGR)
-            pair_color = (0, 255, 0)    # green for pair markers
-            thickness = 3
-            # draw vertical center line
-            cv2.line(sym_img, (center_x, 0), (center_x, h), center_color, thickness, cv2.LINE_AA)
+            # colors for points (BGR): left-side = red, right-side = green
+            left_color = (0, 0, 255)
+            right_color = (0, 255, 0)
+            radius = max(3, min(w, h) // 200)  # scale radius a bit with image size
 
-            # draw symmetric pairs connectors and markers
+            # draw only points for symmetric pairs: left -> red, right -> green
             pairs = [(33, 263), (133, 362), (97, 326), (61, 291)]
             for left_idx, right_idx in pairs:
-                if left_idx < len(landmarks_points) and right_idx < len(landmarks_points):
+                if left_idx < len(landmarks_points):
                     pl = landmarks_points[left_idx]
+                    try:
+                        cv2.circle(sym_img, pl, radius, left_color, -1, cv2.LINE_AA)
+                    except Exception:
+                        pass
+                if right_idx < len(landmarks_points):
                     pr = landmarks_points[right_idx]
-                    # draw small circles
-                    cv2.circle(sym_img, pl, 4, pair_color, -1, cv2.LINE_AA)
-                    cv2.circle(sym_img, pr, 4, pair_color, -1, cv2.LINE_AA)
-                    # draw line between pair
-                    cv2.line(sym_img, pl, pr, pair_color, 2, cv2.LINE_AA)
-                    # draw small horizontal markers to center distances
-                    cv2.line(sym_img, (pl[0], pl[1]-8), (pl[0], pl[1]+8), (255,255,255), 1)
-                    cv2.line(sym_img, (pr[0], pr[1]-8), (pr[0], pr[1]+8), (255,255,255), 1)
+                    try:
+                        cv2.circle(sym_img, pr, radius, right_color, -1, cv2.LINE_AA)
+                    except Exception:
+                        pass
 
             # annotated avg and interpretation text (bold background)
             def put_bg_text(img, text, pos, scale=0.8, thickness_txt=2):
@@ -500,7 +498,7 @@ def analyze():
             'symmetry': symmetry,
             # keep backward-compatible key
             'proportion_image': proportion_image_url,
-            'symmetry_image': symmetry_image_url,
+            'symmetry_image': symmetry_image_url,   
             'status': 'done',
         }
         doc_ref.set(analysis_doc)
