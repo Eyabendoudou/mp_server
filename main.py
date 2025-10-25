@@ -315,26 +315,28 @@ def analyze():
         # Create symmetry annotated image (use original frontal image)
         try:
             sym_img = original_image.copy()
-            # colors for points (BGR): left-side = red, right-side = green
-            left_color = (0, 0, 255)
-            right_color = (0, 255, 0)
-            radius = max(3, min(w, h) // 200)  # scale radius a bit with image size
+            center_x = landmarks_points[1][0] if len(landmarks_points) > 1 else w // 2
+            # colors and thickness
+            center_color = (255, 0, 0)  # blue-ish line (BGR)
+            pair_color = (0, 255, 0)    # green for pair markers
+            thickness = 3
+            # draw vertical center line
+            cv2.line(sym_img, (center_x, 0), (center_x, h), center_color, thickness, cv2.LINE_AA)
 
-            # draw only points for symmetric pairs: left -> red, right -> green
+            # draw symmetric pairs connectors and markers
             pairs = [(33, 263), (133, 362), (97, 326), (61, 291)]
             for left_idx, right_idx in pairs:
-                if left_idx < len(landmarks_points):
+                if left_idx < len(landmarks_points) and right_idx < len(landmarks_points):
                     pl = landmarks_points[left_idx]
-                    try:
-                        cv2.circle(sym_img, pl, radius, left_color, -1, cv2.LINE_AA)
-                    except Exception:
-                        pass
-                if right_idx < len(landmarks_points):
                     pr = landmarks_points[right_idx]
-                    try:
-                        cv2.circle(sym_img, pr, radius, right_color, -1, cv2.LINE_AA)
-                    except Exception:
-                        pass
+                    # draw small circles
+                    cv2.circle(sym_img, pl, 4, pair_color, -1, cv2.LINE_AA)
+                    cv2.circle(sym_img, pr, 4, pair_color, -1, cv2.LINE_AA)
+                    # draw line between pair
+                    cv2.line(sym_img, pl, pr, pair_color, 2, cv2.LINE_AA)
+                    # draw small horizontal markers to center distances
+                    cv2.line(sym_img, (pl[0], pl[1]-8), (pl[0], pl[1]+8), (255,255,255), 1)
+                    cv2.line(sym_img, (pr[0], pr[1]-8), (pr[0], pr[1]+8), (255,255,255), 1)
 
             # annotated avg and interpretation text (bold background)
             def put_bg_text(img, text, pos, scale=0.8, thickness_txt=2):
@@ -448,25 +450,25 @@ def analyze():
                 right_x = max(10, w - 200)
 
                 if upper_mm is not None and 0 <= t_y < h:
-                    put_label_above_line(prop_img, f"Haut: {upper_mm:.1f} mm", t_y, left_x, font, font_scale * 0.6, text_color, 3)
-                    put_label_above_line(prop_img, "Trichion", t_y, right_x, font, font_scale * 0.6, text_color, 2)
+                    put_label_above_line(prop_img, f"Haut: {upper_mm:.1f} mm", t_y, left_x, font, font_scale * 0.6, text_color, 1)
+                    put_label_above_line(prop_img, "Trichion", t_y, right_x, font, font_scale * 0.6, text_color, 1)
 
                 if middle_mm is not None and 0 <= g_y < h:
-                    put_label_above_line(prop_img, f"Milieu: {middle_mm:.1f} mm", g_y, left_x, font, font_scale * 0.6, text_color, 3)
-                    put_label_above_line(prop_img, "Glabella", g_y, right_x, font, font_scale * 0.6, text_color, 2)
+                    put_label_above_line(prop_img, f"Milieu: {middle_mm:.1f} mm", g_y, left_x, font, font_scale * 0.6, text_color, 1)
+                    put_label_above_line(prop_img, "Glabella", g_y, right_x, font, font_scale * 0.6, text_color, 1)
 
                 if lower_mm is not None and 0 <= s_y < h:
-                    put_label_above_line(prop_img, f"Bas: {lower_mm:.1f} mm", s_y, left_x, font, font_scale * 0.6, text_color, 3)
-                    put_label_above_line(prop_img, "Subnasale", s_y, right_x, font, font_scale * 0.6, text_color, 2)
+                    put_label_above_line(prop_img, f"Bas: {lower_mm:.1f} mm", s_y, left_x, font, font_scale * 0.6, text_color, 1)
+                    put_label_above_line(prop_img, "Subnasale", s_y, right_x, font, font_scale * 0.6, text_color, 1)
 
                 # Menton (bottom) label: ensure it's inside image and not overlapping face region
                 if 0 <= m_y < h:
                     # prefer slightly below the bottom line if there's space; otherwise above
-                    (txt_w_m, txt_h_m), baseline_m = cv2.getTextSize("Menton", font, font_scale * 0.8, 2)
+                    (txt_w_m, txt_h_m), baseline_m = cv2.getTextSize("Menton", font, font_scale * 0.8, 1)
                     y_m = m_y + txt_h_m + 12
                     if y_m > h - 6:
                         y_m = max(txt_h_m + 8, m_y - 8)
-                    put_bold_text(prop_img, "Menton", (10, int(y_m)), font, max(0.65, font_scale * 0.8), text_color, 2)
+                    put_bold_text(prop_img, "Menton", (10, int(y_m)), font, max(0.65, font_scale * 0.8), text_color, 1)
 
                 # assessment text at bottom with bold background
                 assessment = proportionality.get('proportionality_assessment')
