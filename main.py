@@ -6,6 +6,17 @@ import os
 from google.cloud import storage
 from google.cloud import firestore
 from datetime import datetime
+import joblib
+import numpy as np
+
+# --- Load ML model ---
+MODEL_PATH = "vit_mlp_weights.pkl"  # adapte le nom à ton fichier
+try:
+    model = joblib.load(MODEL_PATH)
+    print("✅ ML model loaded successfully")
+except Exception as e:
+    print("❌ Error loading model:", e)
+    model = None
 
 
 app = Flask(__name__)
@@ -315,29 +326,26 @@ def analyze():
 
         # Create symmetry annotated image (use original frontal image)
         try:
+            # draw only small colored points for symmetric pairs
             sym_img = original_image.copy()
-            center_x = landmarks_points[1][0] if len(landmarks_points) > 1 else w // 2
-            # colors and thickness
-            center_color = (255, 0, 0)  # blue-ish line (BGR)
-            pair_color = (0, 255, 0)    # green for pair markers
-            thickness = 3
-            # draw vertical center line
-            cv2.line(sym_img, (center_x, 0), (center_x, h), center_color, thickness, cv2.LINE_AA)
-
-            # draw symmetric pairs connectors and markers
+            # scale radius to image but keep it small
+            radius = max(2, min(w, h) // 300)
+            left_color = (0, 0, 255)   # red (BGR)
+            right_color = (0, 255, 0)  # green (BGR)
             pairs = [(33, 263), (133, 362), (97, 326), (61, 291)]
             for left_idx, right_idx in pairs:
-                if left_idx < len(landmarks_points) and right_idx < len(landmarks_points):
-                    pl = landmarks_points[left_idx]
-                    pr = landmarks_points[right_idx]
-                    # draw small circles
-                    cv2.circle(sym_img, pl, 4, pair_color, -1, cv2.LINE_AA)
-                    cv2.circle(sym_img, pr, 4, pair_color, -1, cv2.LINE_AA)
-                    # draw line between pair
-                    cv2.line(sym_img, pl, pr, pair_color, 2, cv2.LINE_AA)
-                    # draw small horizontal markers to center distances
-                    cv2.line(sym_img, (pl[0], pl[1]-8), (pl[0], pl[1]+8), (255,255,255), 1)
-                    cv2.line(sym_img, (pr[0], pr[1]-8), (pr[0], pr[1]+8), (255,255,255), 1)
+                if left_idx < len(landmarks_points):
+                    pl = tuple(map(int, landmarks_points[left_idx]))
+                    try:
+                        cv2.circle(sym_img, pl, radius, left_color, -1, cv2.LINE_AA)
+                    except Exception:
+                        pass
+                if right_idx < len(landmarks_points):
+                    pr = tuple(map(int, landmarks_points[right_idx]))
+                    try:
+                        cv2.circle(sym_img, pr, radius, right_color, -1, cv2.LINE_AA)
+                    except Exception:
+                        pass
 
             # annotated avg and interpretation text (bold background)
             def put_bg_text(img, text, pos, scale=0.8, thickness_txt=2):
@@ -488,6 +496,55 @@ def analyze():
             print("Proportionality image generation/upload error:", e)
             proportion_image_url = None
 
+    # --- MODEL PREDICTION SECTION ---
+    pathology_prediction = None
+    try:
+        if model is not None:
+            # Build input features (replace None by 0)
+            features = [
+                float(clinical_measures.get('face_height_mm') or 0),
+                float(clinical_measures.get('face_width_mm') or 0),
+                float(clinical_measures.get('height_width_ratio') or 0),
+                float(clinical_measures.get('chin_deviation_mm') or 0),
+                float(clinical_measures.get('jaw_left_mm') or 0),
+                float(clinical_measures.get('jaw_right_mm') or 0),
+                float(proportionality.get('upper_third_mm') if proportionality else 0),
+                float(proportionality.get('middle_third_mm') if proportionality else 0),
+                float(proportionality.get('lower_third_mm') if proportionality else 0),
+                float(symmetry.get('meanAsymmetry') if symmetry else 0)
+            ]
+
+            # Validate model expected input dimensionality if available
+            expected = getattr(model, "n_features_in_", None)
+            if expected is not None and expected != len(features):
+                print(f"⚠️ Model expects {expected} features but got {len(features)}. Adjusting input (truncate/pad).")
+                if len(features) > expected:
+                    features = features[:expected]
+                else:
+                    features = features + [0.0] * (expected - len(features))
+
+            X = np.array(features, dtype=float).reshape(1, -1)
+            prediction = model.predict(X)[0]
+
+            # Optionally handle probability if available
+            if hasattr(model, "predict_proba"):
+                proba = model.predict_proba(X)[0]
+                conf = float(np.max(proba))
+            else:
+                conf = None
+
+            pathology_prediction = {
+                "predicted_class": str(prediction),
+                "confidence": conf
+            }
+
+            print("✅ Predicted:", pathology_prediction)
+        else:
+            pathology_prediction = {"predicted_class": "Model not loaded", "confidence": None}
+    except Exception as e:
+        print("❌ Prediction error:", e)
+        pathology_prediction = {"predicted_class": "Error", "confidence": None}
+
     # Persist an analysis document to Firestore (patients/{patientId}/analyses)
     try:
         doc_ref = firestore_client.collection('patients').document(patient_id).collection('analyses').document()
@@ -501,7 +558,8 @@ def analyze():
             'symmetry': symmetry,
             # keep backward-compatible key
             'proportion_image': proportion_image_url,
-            'symmetry_image': symmetry_image_url,   
+            'symmetry_image': symmetry_image_url,
+            'pathologyPrediction': pathology_prediction,
             'status': 'done',
         }
         doc_ref.set(analysis_doc)
@@ -513,6 +571,7 @@ def analyze():
         # Log but don't fail the entire request
         print("Firestore write error:", e)
 
+
     return jsonify({
         "success": True,
         "message": "Processed and uploaded",
@@ -520,8 +579,10 @@ def analyze():
         "landmarks": landmark_list,
         "clinicalMeasures": clinical_measures,
         "proportionality": proportionality,
-        "symmetry": symmetry
+        "symmetry": symmetry,
+        "pathologyPrediction": pathology_prediction
     })
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
