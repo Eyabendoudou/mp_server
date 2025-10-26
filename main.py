@@ -512,10 +512,12 @@ def analyze():
             'symmetry': symmetry,
             # keep backward-compatible key
             'proportion_image': proportion_image_url,
-            'symmetry_image': symmetry_image_url,   
+            'symmetry_image': symmetry_image_url,  
+            'pathologyPrediction': pathology_prediction,  
             'status': 'done',
         }
         doc_ref.set(analysis_doc)
+        
 
         # also write lastAnalysis on patient doc for compatibility
         patient_doc = firestore_client.collection('patients').document(patient_id)
@@ -523,6 +525,52 @@ def analyze():
     except Exception as e:
         # Log but don't fail the entire request
         print("Firestore write error:", e)
+    
+
+    # --- MODEL PREDICTION SECTION ---
+    pathology_prediction = None
+    try:
+        if model is not None:
+            # Build input features (replace None by 0)
+            features = [
+                clinical_measures.get('face_height_mm') or 0,
+                clinical_measures.get('face_width_mm') or 0,
+                clinical_measures.get('height_width_ratio') or 0,
+                clinical_measures.get('chin_deviation_mm') or 0,
+                clinical_measures.get('jaw_left_mm') or 0,
+                clinical_measures.get('jaw_right_mm') or 0,
+                proportionality.get('upper_third_mm') if proportionality else 0,
+                proportionality.get('middle_third_mm') if proportionality else 0,
+                proportionality.get('lower_third_mm') if proportionality else 0,
+                symmetry.get('meanAsymmetry') if symmetry else 0
+            ]
+
+            X = np.array(features).reshape(1, -1)
+            prediction = model.predict(X)[0]
+
+            # Optionally handle probability if available
+            if hasattr(model, "predict_proba"):
+                proba = model.predict_proba(X)[0]
+                conf = float(np.max(proba))
+            else:
+                conf = None
+
+            pathology_prediction = {
+                "predicted_class": str(prediction),
+                "confidence": conf
+            }
+
+            print("✅ Predicted:", pathology_prediction)
+        else:
+            pathology_prediction = {"predicted_class": "Model not loaded", "confidence": None}
+    except Exception as e:
+        print("❌ Prediction error:", e)
+        pathology_prediction = {"predicted_class": "Error", "confidence": None}
+
+
+
+
+
 
     return jsonify({
         "success": True,
@@ -531,8 +579,11 @@ def analyze():
         "landmarks": landmark_list,
         "clinicalMeasures": clinical_measures,
         "proportionality": proportionality,
-        "symmetry": symmetry
+        "symmetry": symmetry,
+        "pathologyPrediction": pathology_prediction 
+        
     })
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
