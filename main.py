@@ -240,8 +240,18 @@ except Exception as e:
     traceback.print_exc()
 
 print("=== MODEL DEBUG END ===")
-
-
+if model is not None:
+    try:
+        print("\n=== MODEL STRUCTURE ===")
+        print(model)
+        # infer input shape if possible
+        first_layer = next(model.modules())
+        for name, layer in model.named_modules():
+            if hasattr(layer, 'in_features'):
+                print("First linear layer:", name, "expects", layer.in_features, "features.")
+                break
+    except Exception as e:
+        print("Could not inspect model layers:", e)
 
 
 
