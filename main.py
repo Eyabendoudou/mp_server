@@ -6,12 +6,13 @@ import os
 from google.cloud import storage
 from google.cloud import firestore
 from datetime import datetime
-import joblib
+import torch
+import torch.nn.functional as F
 import traceback
 
 # Debug / robust model loading
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_FILENAME = "vit_mlp_weights.pkl"   # your file name
+MODEL_FILENAME = "vit_mlp_weights.pkl"   # your file name (PyTorch format recommended: .pt/.pth or TorchScript)
 MODEL_PATH = os.path.join(BASE_DIR, MODEL_FILENAME)
 
 print("=== MODEL DEBUG START ===")
@@ -28,10 +29,58 @@ print("MODEL exists?:", os.path.exists(MODEL_PATH))
 model = None
 try:
     if os.path.exists(MODEL_PATH):
-        model = joblib.load(MODEL_PATH)
-        print(f"✅ ML model loaded successfully from: {MODEL_PATH}")
+        # Try loading as TorchScript first (recommended)
+        try:
+            model = torch.jit.load(MODEL_PATH, map_location='cpu')
+            model.eval()
+            print(f"✅ TorchScript model loaded successfully from: {MODEL_PATH}")
+        except Exception:
+            # Try torch.load for full model objects saved via torch.save(model)
+            try:
+                loaded = torch.load(MODEL_PATH, map_location='cpu')
+                # If loaded is an nn.Module (saved whole model), use it directly
+                if isinstance(loaded, torch.nn.Module):
+                    model = loaded
+                    model.eval()
+                    print(f"✅ Torch nn.Module loaded successfully from: {MODEL_PATH}")
+                # If loaded is a dict, it may be either a state_dict or a dict containing 'state_dict'
+                elif isinstance(loaded, dict):
+                    # If it appears to be a state_dict (tensor values), we cannot reconstruct architecture automatically
+                    # Provide diagnostic info and leave model as None
+                    keys_preview = list(loaded.keys())[:10]
+                    print("Loaded object is a dict. Keys preview:", keys_preview)
+                    if all(isinstance(v, torch.Tensor) for v in list(loaded.values())[:5]):
+                        print("❌ Detected a state_dict-only file. You must either:")
+                        print("   - provide the model class in this code and load state_dict into it, OR")
+                        print("   - save/export a TorchScript module (torch.jit.trace/script) and provide that file instead.")
+                        model = None
+                    else:
+                        # sometimes checkpoints wrap state_dict under 'state_dict' key
+                        sd = loaded.get('state_dict') or loaded.get('model_state_dict')
+                        if sd and isinstance(sd, dict) and all(isinstance(v, torch.Tensor) for v in list(sd.values())[:5]):
+                            print("❌ Checkpoint contains 'state_dict' but no model class is present. Same instruction applies.")
+                            model = None
+                        else:
+                            print("Unknown dict structure loaded; please inspect the checkpoint.")
+                            model = None
+                else:
+                    # fallback: keep loaded if callable/module-like
+                    try:
+                        # attempt to treat loaded as a module-like object
+                        if hasattr(loaded, "eval"):
+                            model = loaded
+                            model.eval()
+                            print(f"✅ Loaded model-like object from: {MODEL_PATH}")
+                        else:
+                            print("❌ Loaded object is not a model. Please provide a TorchScript file or a saved nn.Module.")
+                            model = None
+                    except Exception:
+                        model = None
+            except Exception as e:
+                print("❌ Exception while torch.load:", e)
+                traceback.print_exc()
     else:
-        print("❌ Model file not found at MODEL_PATH. Ensure the .pkl is included in the deployment.")
+        print("❌ Model file not found at MODEL_PATH. Ensure the model file is included in the deployment.")
 except Exception as e:
     print("❌ Exception while loading model:", e)
     traceback.print_exc()
@@ -527,41 +576,71 @@ def analyze():
         # --- MODEL PREDICTION SECTION (moved BEFORE Firestore write) ---
         pathology_prediction = None
         try:
+            # Build input features (replace None by 0)
+            features = [
+                clinical_measures.get('face_height_mm') or 0,
+                clinical_measures.get('face_width_mm') or 0,
+                clinical_measures.get('height_width_ratio') or 0,
+                clinical_measures.get('chin_deviation_mm') or 0,
+                clinical_measures.get('jaw_left_mm') or 0,
+                clinical_measures.get('jaw_right_mm') or 0,
+                proportionality.get('upper_third_mm') if proportionality else 0,
+                proportionality.get('middle_third_mm') if proportionality else 0,
+                proportionality.get('lower_third_mm') if proportionality else 0,
+                symmetry.get('meanAsymmetry') if symmetry else 0
+            ]
+
             if model is not None:
-                # Build input features (replace None by 0)
-                features = [
-                    clinical_measures.get('face_height_mm') or 0,
-                    clinical_measures.get('face_width_mm') or 0,
-                    clinical_measures.get('height_width_ratio') or 0,
-                    clinical_measures.get('chin_deviation_mm') or 0,
-                    clinical_measures.get('jaw_left_mm') or 0,
-                    clinical_measures.get('jaw_right_mm') or 0,
-                    proportionality.get('upper_third_mm') if proportionality else 0,
-                    proportionality.get('middle_third_mm') if proportionality else 0,
-                    proportionality.get('lower_third_mm') if proportionality else 0,
-                    symmetry.get('meanAsymmetry') if symmetry else 0
-                ]
+                X = np.array(features).reshape(1, -1).astype(np.float32)
+                X_tensor = torch.from_numpy(X)
+                model.eval()
+                with torch.no_grad():
+                    out = model(X_tensor)
 
-                X = np.array(features).reshape(1, -1)
-                prediction = model.predict(X)[0]
-
-                # Optionally handle probability if available
-                if hasattr(model, "predict_proba"):
-                    proba = model.predict_proba(X)[0]
-                    conf = float(np.max(proba))
+                # Normalize output to numpy for analysis
+                if isinstance(out, torch.Tensor):
+                    out_np = out.detach().cpu().numpy()
                 else:
-                    conf = None
+                    try:
+                        out_np = np.array(out)
+                    except Exception:
+                        out_np = np.array([float(out)])
 
-                pathology_prediction = {
-                    "predicted_class": str(prediction),
-                    "confidence": conf
-                }
+                # Interpret outputs:
+                # - if vector with >1 classes: apply softmax and take argmax
+                # - if single value: return as regression score
+                predicted_class = None
+                conf = None
+                if out_np is None:
+                    predicted_class = "No output"
+                else:
+                    out_np = np.squeeze(out_np)
+                    if out_np.ndim == 0:
+                        # scalar output (regression or single logit)
+                        val = float(out_np.item())
+                        predicted_class = str(val)
+                        conf = None
+                    elif out_np.ndim == 1 and out_np.shape[0] > 1:
+                        # multi-class logits/probs
+                        # convert logits to probabilities safely
+                        try:
+                            exps = np.exp(out_np - np.max(out_np))
+                            probs = exps / exps.sum()
+                        except Exception:
+                            probs = out_np / out_np.sum() if out_np.sum() != 0 else out_np
+                        idx = int(np.argmax(probs))
+                        predicted_class = str(idx)
+                        conf = float(np.max(probs))
+                    else:
+                        predicted_class = str(out_np.tolist())
 
+                pathology_prediction = {"predicted_class": predicted_class, "confidence": conf}
                 print("✅ Predicted:", pathology_prediction)
             else:
                 pathology_prediction = {"predicted_class": "Model not loaded", "confidence": None}
         except Exception as e:
             print("❌ Prediction error:", e)
+            traceback.print_exc()
             pathology_prediction = {"predicted_class": "Error", "confidence": None}
 
         # Persist an analysis document to Firestore (patients/{patientId}/analyses)
