@@ -249,6 +249,7 @@ if model is not None:
         for name, layer in model.named_modules():
             if hasattr(layer, 'in_features'):
                 print("First linear layer:", name, "expects", layer.in_features, "features.")
+                print("\n=== END STRUCTURE ===")
                 break
     except Exception as e:
         print("Could not inspect model layers:", e)
