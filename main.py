@@ -104,18 +104,32 @@ try:
                     # Detect typical state_dict (tensor values)
                     sample_vals = list(loaded.values())[:5]
                     if sample_vals and all(isinstance(v, torch.Tensor) for v in sample_vals):
-                        print("❌ Detected a state_dict-only file. This contains parameter tensors but NOT the model class.")
-                        print("   Options:")
-                        print("    - Provide the model class in the code and load state_dict via model.load_state_dict(torch.load(...))")
-                        print("    - Or export a TorchScript module (torch.jit.trace/script) and provide that file instead (recommended).")
-                        model = None
+                        print("Detected state_dict-only file. Attempting automatic reconstruction with timm/torchvision...")
+                        sd = loaded
+                        # try timm first
+                        model_candidate = _try_load_with_timm(sd)
+                        if model_candidate is None:
+                            print("timm reconstruction failed or not available, trying torchvision...")
+                            model_candidate = _try_load_with_torchvision(sd)
+
+                        if model_candidate is not None:
+                            model = model_candidate
+                            print("✅ Model reconstructed from state_dict and loaded.")
+                        else:
+                            print("❌ Automatic reconstruction failed. Provide the model class or export TorchScript.")
+                            model = None
                     else:
                         # Some checkpoints store under nested keys like 'state_dict' or 'model'
                         sd = loaded.get('state_dict') or loaded.get('model_state_dict') or loaded.get('model')
                         if isinstance(sd, dict) and sd and all(isinstance(v, torch.Tensor) for v in list(sd.values())[:5]):
-                            print("❌ Checkpoint contains a 'state_dict' entry but no model class included.")
-                            print("   You still need the model architecture in this code to reconstruct and load state_dict.")
-                            model = None
+                            print("Nested checkpoint with 'state_dict' detected. Attempting reconstruction from nested state_dict...")
+                            model_candidate = _try_load_with_timm(sd) or _try_load_with_torchvision(sd)
+                            if model_candidate is not None:
+                                model = model_candidate
+                                print("✅ Model reconstructed from nested state_dict and loaded.")
+                            else:
+                                print("❌ Reconstruction from nested state_dict failed. You must provide the model class or a TorchScript model.")
+                                model = None
                         else:
                             print("Loaded dict does not look like a plain state_dict. Inspect keys and contents locally.")
                             model = None
