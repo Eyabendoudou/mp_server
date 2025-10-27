@@ -15,5 +15,6 @@ RUN chmod +x /app/docker-cmd
 
 RUN pip install --no-cache-dir -r requirements.txt
 COPY vit_mlp_weights.pkl /app/vit_mlp_weights.pkl
+RUN chmod +x /app/vit_mlp_weights.pkl
 COPY . /app
 CMD ["/app/docker-cmd"]
