@@ -1,3 +1,15 @@
+# --- set runtime env and suppress known noisy warnings early ---
+import os
+import warnings
+
+# Reduce TF/TFLite chatter during startup (0=all logs, 1=INFO, 2=WARNING, 3=ERROR)
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+# suppress Python-level warnings (helpful for protobuf deprecation noise)
+os.environ.setdefault("PYTHONWARNINGS", "ignore")
+
+# filter the specific protobuf deprecation message seen in your logs
+warnings.filterwarnings("ignore", message="SymbolDatabase.GetPrototype", category=UserWarning)
+
 from flask import Flask, request, jsonify
 import cv2
 import mediapipe as mp
