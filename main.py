@@ -15,6 +15,37 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_FILENAME = "vit_mlp_weights.pkl"   # your file name (PyTorch format recommended: .pt/.pth or TorchScript)
 MODEL_PATH = os.path.join(BASE_DIR, MODEL_FILENAME)
 
+def inspect_model_file(path):
+    try:
+        info = {}
+        info['exists'] = os.path.exists(path)
+        if not info['exists']:
+            print("Model file does not exist:", path)
+            return info
+
+        info['size_bytes'] = os.path.getsize(path)
+        info['ext'] = os.path.splitext(path)[1].lower()
+        with open(path, 'rb') as f:
+            head = f.read(512)
+        info['head_bytes'] = head[:64]
+        print("Model file info:", {k: info[k] for k in ['exists','size_bytes','ext']})
+        print("First bytes (hex):", info['head_bytes'][:32].hex())
+
+        # Quick heuristics
+        head_text = None
+        try:
+            head_text = head.decode('utf-8', errors='ignore')
+        except Exception:
+            head_text = ''
+        if 'torch' in head_text.lower() or b'\x80\x04' in head:
+            print("Header suggests a Python pickle / torch object.")
+        if head.startswith(b'PK'):
+            print("File looks like a zip archive (TorchScript may be a zip).")
+        return info
+    except Exception as e:
+        print("inspect_model_file error:", e)
+        return {}
+
 print("=== MODEL DEBUG START ===")
 print("CWD:", os.getcwd())
 print("__file__ base dir:", BASE_DIR)
@@ -26,6 +57,15 @@ except Exception as e:
 print("MODEL_PATH:", MODEL_PATH)
 print("MODEL exists?:", os.path.exists(MODEL_PATH))
 
+# add runtime torch version diagnostic
+try:
+    print("torch.__version__:", torch.__version__)
+except Exception as _:
+    print("torch not importable or no __version__ attribute")
+
+# New: run the inspector first to gather basic clues
+inspect_model_file(MODEL_PATH)
+
 model = None
 try:
     if os.path.exists(MODEL_PATH):
@@ -34,10 +74,12 @@ try:
             model = torch.jit.load(MODEL_PATH, map_location='cpu')
             model.eval()
             print(f"✅ TorchScript model loaded successfully from: {MODEL_PATH}")
-        except Exception:
-            # Try torch.load for full model objects saved via torch.save(model)
+        except Exception as e_js:
+            print("torch.jit.load failed:", e_js)
+            # Try torch.load for full model objects saved via torch.save(model) or state_dicts
             try:
                 loaded = torch.load(MODEL_PATH, map_location='cpu')
+                print("torch.load succeeded. type:", type(loaded))
                 # If loaded is an nn.Module (saved whole model), use it directly
                 if isinstance(loaded, torch.nn.Module):
                     model = loaded
@@ -45,39 +87,37 @@ try:
                     print(f"✅ Torch nn.Module loaded successfully from: {MODEL_PATH}")
                 # If loaded is a dict, it may be either a state_dict or a dict containing 'state_dict'
                 elif isinstance(loaded, dict):
-                    # If it appears to be a state_dict (tensor values), we cannot reconstruct architecture automatically
-                    # Provide diagnostic info and leave model as None
-                    keys_preview = list(loaded.keys())[:10]
+                    keys_preview = list(loaded.keys())[:20]
                     print("Loaded object is a dict. Keys preview:", keys_preview)
-                    if all(isinstance(v, torch.Tensor) for v in list(loaded.values())[:5]):
-                        print("❌ Detected a state_dict-only file. You must either:")
-                        print("   - provide the model class in this code and load state_dict into it, OR")
-                        print("   - save/export a TorchScript module (torch.jit.trace/script) and provide that file instead.")
+                    # Detect typical state_dict (tensor values)
+                    sample_vals = list(loaded.values())[:5]
+                    if sample_vals and all(isinstance(v, torch.Tensor) for v in sample_vals):
+                        print("❌ Detected a state_dict-only file. This contains parameter tensors but NOT the model class.")
+                        print("   Options:")
+                        print("    - Provide the model class in the code and load state_dict via model.load_state_dict(torch.load(...))")
+                        print("    - Or export a TorchScript module (torch.jit.trace/script) and provide that file instead (recommended).")
                         model = None
                     else:
-                        # sometimes checkpoints wrap state_dict under 'state_dict' key
-                        sd = loaded.get('state_dict') or loaded.get('model_state_dict')
-                        if sd and isinstance(sd, dict) and all(isinstance(v, torch.Tensor) for v in list(sd.values())[:5]):
-                            print("❌ Checkpoint contains 'state_dict' but no model class is present. Same instruction applies.")
+                        # Some checkpoints store under nested keys like 'state_dict' or 'model'
+                        sd = loaded.get('state_dict') or loaded.get('model_state_dict') or loaded.get('model')
+                        if isinstance(sd, dict) and sd and all(isinstance(v, torch.Tensor) for v in list(sd.values())[:5]):
+                            print("❌ Checkpoint contains a 'state_dict' entry but no model class included.")
+                            print("   You still need the model architecture in this code to reconstruct and load state_dict.")
                             model = None
                         else:
-                            print("Unknown dict structure loaded; please inspect the checkpoint.")
+                            print("Loaded dict does not look like a plain state_dict. Inspect keys and contents locally.")
                             model = None
                 else:
-                    # fallback: keep loaded if callable/module-like
-                    try:
-                        # attempt to treat loaded as a module-like object
-                        if hasattr(loaded, "eval"):
-                            model = loaded
-                            model.eval()
-                            print(f"✅ Loaded model-like object from: {MODEL_PATH}")
-                        else:
-                            print("❌ Loaded object is not a model. Please provide a TorchScript file or a saved nn.Module.")
-                            model = None
-                    except Exception:
+                    # Some libraries save custom objects — try to use it if it looks like a module
+                    if hasattr(loaded, "eval") and callable(getattr(loaded, "eval")):
+                        model = loaded
+                        model.eval()
+                        print("✅ Loaded a model-like object from checkpoint.")
+                    else:
+                        print("Loaded object is not a model or state_dict. Type:", type(loaded))
                         model = None
-            except Exception as e:
-                print("❌ Exception while torch.load:", e)
+            except Exception as e_tl:
+                print("torch.load also failed:", e_tl)
                 traceback.print_exc()
     else:
         print("❌ Model file not found at MODEL_PATH. Ensure the model file is included in the deployment.")
