@@ -24,7 +24,9 @@ firestore_client = firestore.Client()
 # --- INIT Mediapipe ---
 mp_face_mesh = mp.solutions.face_mesh
 # --- Load ML model ---
-MODEL_PATH = ("MODEL_PKL_PATH","vit_mlp_weights.pkl")  # adapte le nom à ton fichier
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "vit_mlp_weights.pkl")
+
 try:
     model = joblib.load(MODEL_PATH)
     print("✅ ML model loaded successfully")
