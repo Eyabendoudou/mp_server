@@ -7,6 +7,37 @@ from google.cloud import storage
 from google.cloud import firestore
 from datetime import datetime
 import joblib
+import traceback
+
+# Debug / robust model loading
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_FILENAME = "vit_mlp_weights.pkl"   # your file name
+MODEL_PATH = os.path.join(BASE_DIR, MODEL_FILENAME)
+
+print("=== MODEL DEBUG START ===")
+print("CWD:", os.getcwd())
+print("__file__ base dir:", BASE_DIR)
+try:
+    print("Files in base dir:", os.listdir(BASE_DIR))
+except Exception as e:
+    print("Could not list base dir:", e)
+
+print("MODEL_PATH:", MODEL_PATH)
+print("MODEL exists?:", os.path.exists(MODEL_PATH))
+
+model = None
+try:
+    if os.path.exists(MODEL_PATH):
+        model = joblib.load(MODEL_PATH)
+        print(f"✅ ML model loaded successfully from: {MODEL_PATH}")
+    else:
+        print("❌ Model file not found at MODEL_PATH. Ensure the .pkl is included in the deployment.")
+except Exception as e:
+    print("❌ Exception while loading model:", e)
+    traceback.print_exc()
+
+print("=== MODEL DEBUG END ===")
+
 
 
 
