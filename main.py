@@ -8,14 +8,7 @@ from google.cloud import firestore
 from datetime import datetime
 import joblib
 
-# --- Load ML model ---
-MODEL_PATH = "vit_mlp_weights.pkl"  # adapte le nom à ton fichier
-try:
-    model = joblib.load(MODEL_PATH)
-    print("✅ ML model loaded successfully")
-except Exception as e:
-    print("❌ Error loading model:", e)
-    model = None
+
 
 
 app = Flask(__name__)
@@ -30,7 +23,14 @@ firestore_client = firestore.Client()
 
 # --- INIT Mediapipe ---
 mp_face_mesh = mp.solutions.face_mesh
-
+# --- Load ML model ---
+MODEL_PATH = ("MODEL_PKL_PATH","vit_mlp_weights.pkl")  # adapte le nom à ton fichier
+try:
+    model = joblib.load(MODEL_PATH)
+    print("✅ ML model loaded successfully")
+except Exception as e:
+    print("❌ Error loading model:", e)
+    model = None
 def upload_bytes_to_storage(bytes_data: bytes, destination_path: str) -> str:
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(destination_path)
