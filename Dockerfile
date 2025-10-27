@@ -10,11 +10,15 @@ RUN apt-get update && apt-get install -y \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . .
+
+# Copy only requirements first to leverage build cache
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the project (includes docker-cmd and weights)
+COPY . /app
+
+# Ensure start command is executable (do this after final COPY)
 RUN chmod +x /app/docker-cmd
 
-RUN pip install --no-cache-dir -r requirements.txt
-COPY vit_mlp_weights.pkl /app/vit_mlp_weights.pkl
-RUN chmod +x /app/vit_mlp_weights.pkl
-COPY . /app
 CMD ["/app/docker-cmd"]
