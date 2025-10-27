@@ -27,121 +27,37 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_FILENAME = "vit_mlp_weights.pkl"   # your file name (PyTorch format recommended: .pt/.pth or TorchScript)
 MODEL_PATH = os.path.join(BASE_DIR, MODEL_FILENAME)
 
-# New helpers: infer classes / strip prefixes / try timm / try torchvision
-def _infer_num_classes_from_state_dict(sd: dict):
-    # try common head keys
-    for k in ('head.weight', 'head.fc.weight', 'classifier.weight', 'heads.0.weight', 'vit.head.weight'):
-        if k in sd:
-            try:
-                return int(sd[k].shape[0])
-            except Exception:
-                pass
-    # fallback: inspect keys for any classifier-like tensor
-    for k, v in sd.items():
-        if ('head' in k or 'classifier' in k) and hasattr(v, 'shape'):
-            try:
-                return int(v.shape[0])
-            except Exception:
-                pass
-    return 1000
-
-def _strip_prefix_from_state_dict(sd: dict, prefix: str):
-    if not prefix:
-        return sd
-    new = {}
-    for k, v in sd.items():
-        if k.startswith(prefix):
-            new[k[len(prefix):]] = v
-        else:
-            new[k] = v
-    return new
-
-def _try_load_with_timm(sd: dict):
+# add inspector so it's defined before being called
+def inspect_model_file(path):
     try:
-        import timm
-    except Exception as e:
-        print("timm not available:", e)
-        return None
-    num_classes = _infer_num_classes_from_state_dict(sd)
-    candidates = ["vit_base_patch16_224", "vit_base_patch32_224", "vit_small_patch16_224", "vit_tiny_patch16_224"]
-    for name in candidates:
+        info = {}
+        info['exists'] = os.path.exists(path)
+        if not info['exists']:
+            print("Model file does not exist:", path)
+            return info
+        info['size_bytes'] = os.path.getsize(path)
+        info['ext'] = os.path.splitext(path)[1].lower()
+        with open(path, 'rb') as f:
+            head = f.read(512)
+        info['head_bytes'] = head[:64]
+        print("Model file info:", {k: info[k] for k in ['exists','size_bytes','ext']})
         try:
-            print("Attempting timm.create_model(", name, "num_classes=", num_classes, ")")
-            model = timm.create_model(name, pretrained=False, num_classes=num_classes)
-            # strip common prefixes
-            stripped = _strip_prefix_from_state_dict(sd, "vit.")
-            stripped = _strip_prefix_from_state_dict(stripped, "model.")
-            stripped = _strip_prefix_from_state_dict(stripped, "module.")
-            missing, unexpected = model.load_state_dict(stripped, strict=False)
-            print("timm load_state_dict -> missing keys:", missing, " unexpected keys:", unexpected)
-            model.eval()
-            return model
-        except Exception as e:
-            print(f"timm attempt {name} failed:", e)
-            continue
-    return None
-
-def _try_load_with_torchvision(sd: dict):
-    try:
-        import torchvision
-        # check for vit constructor
-        builder = None
-        if hasattr(torchvision.models, "vit_b_16"):
-            builder = torchvision.models.vit_b_16
-        elif hasattr(torchvision.models, "vit_b_32"):
-            builder = torchvision.models.vit_b_32
-        if builder is None:
-            print("torchvision lacks ViT model builders in this version.")
-            return None
-        num_classes = _infer_num_classes_from_state_dict(sd)
+            print("First bytes (hex):", info['head_bytes'][:32].hex())
+        except Exception:
+            pass
+        # heuristics
         try:
-            # API may vary; try both ways
-            try:
-                model = builder(weights=None, num_classes=num_classes)  # newer API
-            except TypeError:
-                model = builder(pretrained=False)
-        except Exception as e:
-            print("Error instantiating torchvision ViT:", e)
-            return None
-        stripped = _strip_prefix_from_state_dict(sd, "vit.")
-        stripped = _strip_prefix_from_state_dict(stripped, "model.")
-        stripped = _strip_prefix_from_state_dict(stripped, "module.")
-        missing, unexpected = model.load_state_dict(stripped, strict=False)
-        print("torchvision load_state_dict -> missing keys:", missing, " unexpected keys:", unexpected)
-        model.eval()
-        return model
+            head_text = head.decode('utf-8', errors='ignore')
+        except Exception:
+            head_text = ''
+        if 'torch' in head_text.lower() or b'\x80\x04' in head:
+            print("Header suggests a Python pickle / torch object.")
+        if head.startswith(b'PK'):
+            print("File looks like a zip archive (TorchScript may be a zip).")
+        return info
     except Exception as e:
-        print("torchvision attempt failed:", e)
-        return None
-
-# --- set runtime env and suppress known noisy warnings early ---
-import os
-import warnings
-
-# Reduce TF/TFLite chatter during startup (0=all logs, 1=INFO, 2=WARNING, 3=ERROR)
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-# suppress Python-level warnings (helpful for protobuf deprecation noise)
-os.environ.setdefault("PYTHONWARNINGS", "ignore")
-
-# filter the specific protobuf deprecation message seen in your logs
-warnings.filterwarnings("ignore", message="SymbolDatabase.GetPrototype", category=UserWarning)
-
-from flask import Flask, request, jsonify
-import cv2
-import mediapipe as mp
-import numpy as np
-import os
-from google.cloud import storage
-from google.cloud import firestore
-from datetime import datetime
-import torch
-import torch.nn.functional as F
-import traceback
-
-# Debug / robust model loading
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_FILENAME = "vit_mlp_weights.pkl"   # your file name (PyTorch format recommended: .pt/.pth or TorchScript)
-MODEL_PATH = os.path.join(BASE_DIR, MODEL_FILENAME)
+        print("inspect_model_file error:", e)
+        return {}
 
 # New helpers: infer classes / strip prefixes / try timm / try torchvision
 def _infer_num_classes_from_state_dict(sd: dict):
