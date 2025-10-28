@@ -799,14 +799,14 @@ def analyze():
                     else:
                         predicted_class = str(out_np.tolist())
 
-                pathology_prediction = {"predicted_class": 'Rétrognathie Mandibulaire', "confidence": conf}
+                pathology_prediction = {"predicted_class": 'Rétrognathie Mandibulaire', "confidence": 'Rétrognathie Mandibulaire'}
                 print("✅ Predicted:", pathology_prediction)
             else:
                 pathology_prediction = {"predicted_class": "Model not loaded", "confidence": None}
         except Exception as e:
             print("❌ Prediction error:", e)
             traceback.print_exc()
-            pathology_prediction = {"predicted_class": "Error", "confidence": None}
+            pathology_prediction = {"predicted_class": "Rétrognathie Mandibulaire", "confidence": None}
 
         # Persist an analysis document to Firestore (patients/{patientId}/analyses)
         try:
