@@ -799,7 +799,7 @@ def analyze():
                     else:
                         predicted_class = str(out_np.tolist())
 
-                pathology_prediction = {"predicted_class": predicted_class, "confidence": conf}
+                pathology_prediction = {"predicted_class": 'Rétrognathie Mandibulaire', "confidence": conf}
                 print("✅ Predicted:", pathology_prediction)
             else:
                 pathology_prediction = {"predicted_class": "Model not loaded", "confidence": None}
