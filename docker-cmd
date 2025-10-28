@@ -1,0 +1,42 @@
+# Supprimer l'ancien
+rm docker-cmd
+
+# Recréer avec les bonnes fins de ligne
+cat > docker-cmd << 'EOF'
+#!/bin/bash
+set -e
+PORT=${PORT:-5000}
+
+echo "=========================================="
+echo "🚀 Starting Medical AI Server"
+echo "Port: $PORT"
+echo "=========================================="
+
+if [ -f "/app/best_vit_mlp.pt" ]; then
+    echo "✅ Model file found"
+else
+    echo "⚠ Model not found"
+fi
+
+if [ -f "/app/maxillo-app-firebase-adminsdk-fbsvc-33e4682258.json" ]; then
+    echo "✅ Firebase credentials found"
+else
+    echo "⚠ Firebase credentials not found"
+fi
+
+echo "Starting Gunicorn..."
+
+exec gunicorn app:app \
+    --bind 0.0.0.0:$PORT \
+    --workers 2 \
+    --threads 2 \
+    --timeout 180 \
+    --keep-alive 5 \
+    --max-requests 1000 \
+    --preload \
+    --log-level info \
+    --access-logfile - \
+    --error-logfile -
+EOF
+
+chmod +x docker-cmd
