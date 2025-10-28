@@ -1,6 +1,6 @@
 # ==========================================
 # Dockerfile pour ViT+MLP + Mediapipe + Firebase
-# Optimisé pour Railway
+# Version simplifiée sans docker-cmd
 # ==========================================
 
 FROM python:3.11-slim
@@ -13,36 +13,38 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libxext6 \
     libgomp1 \
-    libgfortran5 \
-    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first (better caching)
+# Copy requirements first (better Docker caching)
 COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy all application files
 COPY . .
-
-# Make docker-cmd executable
-RUN chmod +x /app/docker-cmd
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Expose port (Railway will override with $PORT)
+# Expose port
 EXPOSE 5000
 
-# Health check (optional but recommended)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:${PORT:-5000}/health')"
-
-# Run the application
-CMD ["/app/docker-cmd"]
+# Start application directly with gunicorn
+CMD gunicorn main:app \
+    --bind 0.0.0.0:${PORT:-5000} \
+    --workers 2 \
+    --threads 2 \
+    --timeout 180 \
+    --keep-alive 5 \
+    --max-requests 1000 \
+    --max-requests-jitter 50 \
+    --preload \
+    --log-level info \
+    --access-logfile - \
+    --error-logfile -
