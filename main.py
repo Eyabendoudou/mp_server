@@ -780,21 +780,55 @@ def analyze():
                 X_scaled = np.array(features).reshape(1, -1).astype(np.float32)
 
             if model is not None:
+                # Prepare tensor on device
                 X_tensor = torch.tensor(X_scaled, dtype=torch.float32).to(device)
                 model.eval()
+                out = None
                 with torch.no_grad():
-                    # Try calling model in tabular-only mode first
                     try:
-                        out = model(X_tensor)  # some saved checkpoints accept tabular-only input
-                    except Exception:
-                        # fallback: if model expects (images, tabular), pass zero images
-                        try:
-                            # attempt to infer num_views and image dims; default to (1,1,3,224,224)
-                            dummy_images = torch.zeros((1, 1, 3, 224, 224), dtype=torch.float32).to(device)
-                            out = model(dummy_images, X_tensor)
-                        except Exception as e2:
-                            print("Model call failed with both signatures:", e2)
-                            raise
+                        # Heuristic: fusion model -> has fusion or mlp_tab attributes
+                        if hasattr(model, 'fusion') or hasattr(model, 'mlp_tab'):
+                            # try tabular-only call first
+                            try:
+                                out = model(X_tensor)
+                            except Exception as e_tab:
+                                # try images+tabular signature (images, tabular)
+                                try:
+                                    num_views = getattr(model, 'num_views', 1)
+                                    batch = X_tensor.shape[0]
+                                    dummy_images = torch.zeros((batch, num_views, 3, 224, 224), dtype=torch.float32).to(device)
+                                    out = model(dummy_images, X_tensor)
+                                except Exception as e_img:
+                                    # some wrappers might accept (tabular, images)
+                                    try:
+                                        dummy_images = torch.zeros((batch, num_views, 3, 224, 224), dtype=torch.float32).to(device)
+                                        out = model(X_tensor, dummy_images)
+                                    except Exception as e_both:
+                                        print("Fusion-model calls failed:", e_tab, e_img, e_both)
+                                        raise RuntimeError("Model call signature not supported by this checkpoint.")
+                        # Heuristic: vision-only timm ViT -> has forward_features / patch_embed
+                        elif hasattr(model, 'forward_features') or hasattr(model, 'patch_embed'):
+                            # vision-only expects (B,C,H,W)
+                            batch = X_tensor.shape[0]
+                            dummy_images = torch.zeros((batch, 3, 224, 224), dtype=torch.float32).to(device)
+                            out = model(dummy_images)
+                        else:
+                            # generic attempt
+                            try:
+                                out = model(X_tensor)
+                            except Exception:
+                                # final fallback: try dummy image first then tabular as second arg
+                                batch = X_tensor.shape[0]
+                                dummy_images = torch.zeros((batch, 3, 224, 224), dtype=torch.float32).to(device)
+                                try:
+                                    out = model(dummy_images)
+                                except Exception as e_f:
+                                    print("Final generic model call attempts failed:", e_f)
+                                    raise
+                    except Exception as e:
+                        print("Model inference failed:", e)
+                        traceback.print_exc()
+                        raise
 
                 # Normalize output to numpy for analysis
                 if isinstance(out, torch.Tensor):
@@ -823,7 +857,6 @@ def analyze():
                         try:
                             predicted_label = label_encoder.inverse_transform([idx])[0]
                         except Exception:
-                            # label encoder might store classes_ as strings already
                             classes = getattr(label_encoder, "classes_", None)
                             predicted_label = str(classes[idx]) if classes is not None and idx < len(classes) else str(idx)
                     else:
