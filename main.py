@@ -1,31 +1,47 @@
 # --- set runtime env and suppress known noisy warnings early ---
 import os
 import warnings
+import traceback
+from datetime import datetime
 
 # Reduce TF/TFLite chatter during startup (0=all logs, 1=INFO, 2=WARNING, 3=ERROR)
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 # suppress Python-level warnings (helpful for protobuf deprecation noise)
 os.environ.setdefault("PYTHONWARNINGS", "ignore")
-
 # filter the specific protobuf deprecation message seen in your logs
 warnings.filterwarnings("ignore", message="SymbolDatabase.GetPrototype", category=UserWarning)
 
+# --- Paths / artifacts (you said you have these three files) ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATE_DICT_FILENAME = "vit_mlp_state_dict.pth"
+STATE_DICT_PATH = os.path.join(BASE_DIR, STATE_DICT_FILENAME)
+SCALER_PATH = os.path.join(BASE_DIR, "tabular_scaler.pkl")
+LABEL_ENCODER_PATH = os.path.join(BASE_DIR, "label_encoder.pkl")
+
+MODEL_FILENAME = "vit_mlp_weights.pkl"   # keep existing fallback name
+MODEL_PATH = os.path.join(BASE_DIR, MODEL_FILENAME)
+
+# --- clients
+from google.cloud import storage
+from google.cloud import firestore
+
+# --- flask app
 from flask import Flask, request, jsonify
+
+# --- image + video
 import cv2
 import mediapipe as mp
 import numpy as np
-import os
-from google.cloud import storage
-from google.cloud import firestore
-from datetime import datetime
+
+# --- torch / pytorch
 import torch
-import torch.nn.functional as F
-import traceback
+import torch.nn as nn
+
+# --- joblib for loading scaler/encoder
+import joblib
 
 # Debug / robust model loading
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_FILENAME = "vit_mlp_weights.pkl"   # your file name (PyTorch format recommended: .pt/.pth or TorchScript)
-MODEL_PATH = os.path.join(BASE_DIR, MODEL_FILENAME)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # add inspector so it's defined before being called
 def inspect_model_file(path):
@@ -254,15 +270,10 @@ if model is not None:
     except Exception as e:
         print("Could not inspect model layers:", e)
 
-
-
-app = Flask(__name__)
-SERVER_SECRET = os.environ.get("ANALYZER_SECRET", "a63b2f31bd9e236a5220bcaee53ea16e300454e3c27e95f8d6c46ceea6abe09e")
 # --- INIT Firebase Storage + Firestore ---
 BUCKET_NAME = "maxillo-app.firebasestorage.app"
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "maxillo-app-firebase-adminsdk-fbsvc-33e4682258.json"
-
-# --- clients
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(BASE_DIR, "maxillo-app-firebase-adminsdk-fbsvc-33e4682258.json")
+SERVER_SECRET = os.environ.get("ANALYZER_SECRET", "a63b2f31bd9e236a5220bcaee53ea16e300454e3c27e95f8d6c46ceea6abe09e")
 storage_client = storage.Client()
 firestore_client = firestore.Client()
 
@@ -489,6 +500,8 @@ def test_symetrie_mm(landmarks_points, ipd_mm=63.0):
     except Exception as e:
         print("Symmetry calc error:", e)
         return None, "Erreur calcul symetrie"
+
+app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
 def home():
@@ -755,12 +768,33 @@ def analyze():
                 symmetry.get('meanAsymmetry') if symmetry else 0
             ]
 
+            # Apply scaler if available
+            X_scaled = None
+            try:
+                if scaler is not None:
+                    X_scaled = scaler.transform([features])
+                else:
+                    X_scaled = np.array(features).reshape(1, -1).astype(np.float32)
+            except Exception as e:
+                print("Scaler transform failed, using raw features:", e)
+                X_scaled = np.array(features).reshape(1, -1).astype(np.float32)
+
             if model is not None:
-                X = np.array(features).reshape(1, -1).astype(np.float32)
-                X_tensor = torch.from_numpy(X)
+                X_tensor = torch.tensor(X_scaled, dtype=torch.float32).to(device)
                 model.eval()
                 with torch.no_grad():
-                    out = model(X_tensor)
+                    # Try calling model in tabular-only mode first
+                    try:
+                        out = model(X_tensor)  # some saved checkpoints accept tabular-only input
+                    except Exception:
+                        # fallback: if model expects (images, tabular), pass zero images
+                        try:
+                            # attempt to infer num_views and image dims; default to (1,1,3,224,224)
+                            dummy_images = torch.zeros((1, 1, 3, 224, 224), dtype=torch.float32).to(device)
+                            out = model(dummy_images, X_tensor)
+                        except Exception as e2:
+                            print("Model call failed with both signatures:", e2)
+                            raise
 
                 # Normalize output to numpy for analysis
                 if isinstance(out, torch.Tensor):
@@ -771,42 +805,40 @@ def analyze():
                     except Exception:
                         out_np = np.array([float(out)])
 
-                # Interpret outputs:
-                # - if vector with >1 classes: apply softmax and take argmax
-                # - if single value: return as regression score
-                predicted_class = None
+                out_np = np.squeeze(out_np)
+                predicted_label = None
                 conf = None
-                if out_np is None:
-                    predicted_class = "No output"
-                else:
-                    out_np = np.squeeze(out_np)
-                    if out_np.ndim == 0:
-                        # scalar output (regression or single logit)
-                        val = float(out_np.item())
-                        predicted_class = str(val)
-                        conf = None
-                    elif out_np.ndim == 1 and out_np.shape[0] > 1:
-                        # multi-class logits/probs
-                        # convert logits to probabilities safely
+                if np.ndim(out_np) == 0:
+                    predicted_label = str(float(out_np))
+                elif np.ndim(out_np) == 1 and out_np.shape[0] > 1:
+                    try:
+                        exps = np.exp(out_np - np.max(out_np))
+                        probs = exps / exps.sum()
+                    except Exception:
+                        probs = out_np / out_np.sum() if out_np.sum() != 0 else out_np
+                    idx = int(np.argmax(probs))
+                    conf = float(np.max(probs))
+                    # map index to human-readable label if encoder present
+                    if label_encoder is not None and hasattr(label_encoder, "inverse_transform"):
                         try:
-                            exps = np.exp(out_np - np.max(out_np))
-                            probs = exps / exps.sum()
+                            predicted_label = label_encoder.inverse_transform([idx])[0]
                         except Exception:
-                            probs = out_np / out_np.sum() if out_np.sum() != 0 else out_np
-                        idx = int(np.argmax(probs))
-                        predicted_class = str(idx)
-                        conf = float(np.max(probs))
+                            # label encoder might store classes_ as strings already
+                            classes = getattr(label_encoder, "classes_", None)
+                            predicted_label = str(classes[idx]) if classes is not None and idx < len(classes) else str(idx)
                     else:
-                        predicted_class = str(out_np.tolist())
+                        predicted_label = str(idx)
+                else:
+                    predicted_label = str(out_np.tolist())
 
-                pathology_prediction = {"predicted_class": 'Rétrognathie Mandibulaire', "confidence": 'Rétrognathie Mandibulaire'}
-                print("✅ Predicted:", pathology_prediction)
+                pathology_prediction = {"predicted_class": predicted_label, "confidence": conf}
+                print("Predicted:", pathology_prediction)
             else:
                 pathology_prediction = {"predicted_class": "Model not loaded", "confidence": None}
         except Exception as e:
-            print("❌ Prediction error:", e)
+            print("Prediction error:", e)
             traceback.print_exc()
-            pathology_prediction = {"predicted_class": "Rétrognathie Mandibulaire", "confidence": None}
+            pathology_prediction = {"predicted_class": "Error", "confidence": None}
 
         # Persist an analysis document to Firestore (patients/{patientId}/analyses)
         try:
